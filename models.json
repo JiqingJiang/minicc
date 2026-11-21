@@ -1,0 +1,47 @@
+{
+  "default": "deepseek-flash",
+  "models": {
+    "bailian": {
+      "model": "dashscope/qwen-flash",
+      "provider_label": "阿里云百炼",
+      "api_key_env": "BAILIAN_API_KEY",
+      "api_base_env": "BAILIAN_OPENAI_BASE_URL"
+    },
+    "deepseek-flash": {
+      "model": "deepseek/deepseek-flash",
+      "provider_label": "DeepSeek",
+      "api_key_env": "DEEPSEEK_API_KEY",
+      "api_base_env": "DEEPSEEK_BASE_URL",
+      "extra_body": {"thinking": {"type": "disabled"}}
+    },
+    "deepseek-v4-pro": {
+      "model": "deepseek/deepseek-v4-pro",
+      "provider_label": "DeepSeek",
+      "api_key_env": "DEEPSEEK_API_KEY",
+      "api_base_env": "DEEPSEEK_BASE_URL",
+      "extra_body": {"thinking": {"type": "disabled"}}
+    },
+    "glm": {
+      "model": "bigmodel/glm-5.3",
+      "provider_label": "智谱 GLM",
+      "api_key_env": "GLM_API_KEY",
+      "api_base_env": "GLM_BASE_URL",
+      "extra_body": {"thinking": {"type": "disabled"}}
+    },
+    "claude": {
+      "model": "anthropic/claude-sonnet-5",
+      "provider_label": "Anthropic",
+      "api_key_env": "ANTHROPIC_API_KEY"
+    },
+    "openai-chat": {
+      "model": "openai/gpt-4.1-mini",
+      "provider_label": "OpenAI",
+      "api_key_env": "OPENAI_API_KEY"
+    },
+    "openai-responses": {
+      "model": "openai/responses/gpt-6-luna",
+      "provider_label": "OpenAI",
+      "api_key_env": "OPENAI_API_KEY"
+    }
+  }
+}

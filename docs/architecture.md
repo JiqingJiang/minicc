@@ -22,7 +22,7 @@ MiniCC/
 │   │   ├── task/                # 任务状态、Goal、Plan、取消和恢复
 │   │   └── hitl/                # 澄清问题、授权请求与回答
 │   ├── harness/
-│   │   ├── agent-loop/          # 模型与工具循环，ReAct 等策略
+│   │   ├── agent_loop/          # 模型与工具循环，ReAct 等策略
 │   │   ├── context/             # 模型输入装配、选材、预算与压缩
 │   │   ├── memory/              # 跨聊天偏好、来源与纠正
 │   │   ├── skills/              # 产品运行时的 Skill 发现与加载

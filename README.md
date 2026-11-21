@@ -2,6 +2,8 @@
 
 MiniCC 是通用 Agent Harness。现阶段用学校和个人项目中的真实任务验证交付质量、用户介入次数和总 Token。详见[项目目标](docs/goal.md)与[架构和代码目录](docs/architecture.md)。
 
+安装 [Python 依赖](requirements.txt) 并配置 `DEEPSEEK_API_KEY` 后，通过 `python3 -B -m src.app.chat` 开始多轮对话。模型在 [models.json](models.json) 中注册，选用方式见 [Agent Loop 运行说明](docs/modules/agent-loop/README.md)。
+
 ## 在这个仓库协作
 
 从 [AGENTS.md](AGENTS.md) 开始。Claude Code 共用这份规则。
