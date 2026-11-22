@@ -44,7 +44,8 @@ MiniCC/
 ├── docs/
 │   ├── goal.md
 │   ├── architecture.md
-│   └── modules/                 # 按需补充已形成模块的文档
+│   ├── specs/                   # 各模块当前有效的已确认 spec
+│   └── modules/                 # 各模块实际设计、实现逻辑和验证
 └── .agents/                     # 开发流程、上下文加载与决策记录
 ```
 
@@ -62,4 +63,4 @@ MiniCC/
 
 ## 模块文档
 
-按需在 `docs/modules/<模块名>/` 记录当前实现与验证方式（`README.md`）、获同意的模块设计（`spec.md`）和评测证据（`evaluation.md`）。架构取舍、旧稿与开源项目对照见[Agent Notes](../.agents/notes/README.md)。
+当前有效的模块 spec 放在 `docs/specs/<模块名>.md`；模块实际设计、实现逻辑、边界、运行方式和验证证据放在 `docs/modules/<模块名>.md`。重要方案取舍、问题根因、Code Review 发现及修复结论精简记录在[Agent Notes](../.agents/notes/README.md)，模块文档和 spec 链接相关记录，避免复制整段过程。

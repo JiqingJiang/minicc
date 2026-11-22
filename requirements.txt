@@ -1,1 +1,5 @@
 litellm-core==1.110.2
+jsonschema==4.26.0
+
+rich>=13.7.0,<15
+regex>=2024.11.6,<2027

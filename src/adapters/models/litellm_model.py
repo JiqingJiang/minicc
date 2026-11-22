@@ -2,7 +2,20 @@ import json
 import os
 from pathlib import Path
 
-from src.harness.agent_loop.run_turn import Complete, Message
+from src.harness.agent_loop.run_turn import Complete, Message, ModelReply, ModelRequestError, RequestUsage
+from src.harness.tools.base import BaseTool, ToolCall, schema_size, tool_definitions
+
+
+def _wire_message(message: Message) -> dict:
+    wire: dict[str, object] = {"role": message["role"], "content": message["content"]}
+    if "call_id" in message:
+        wire["tool_call_id"] = message["call_id"]
+    if "tool_calls" in message:
+        wire["tool_calls"] = [
+            {"id": call.call_id, "type": "function", "function": {"name": call.name, "arguments": call.arguments}}
+            for call in message["tool_calls"]
+        ]
+    return wire
 
 
 def load_model_config(config_path: Path) -> dict:
@@ -64,23 +77,28 @@ def create_model(config: dict, alias: str) -> Complete:
     except ModuleNotFoundError as error:
         raise RuntimeError("请先运行 python3 -m pip install -r requirements.txt。") from error
 
-    def complete(messages: list[Message]) -> str | None:
+    def complete(messages: list[Message], tools: tuple[BaseTool, ...], timeout: float) -> ModelReply:
+        options = {}
+        if tools:
+            options["tools"] = tool_definitions(tools)
         try:
             response = completion(
                 model=route,
-                messages=messages,
+                messages=[_wire_message(message) for message in messages],
                 api_key=api_key,
                 api_base=api_base,
                 extra_body=extra_body,
-                timeout=60,
+                timeout=timeout,
                 stream=False,
+                num_retries=0,
+                **options,
             )
         except Timeout as error:
-            raise TimeoutError("模型请求超时。") from error
+            raise ModelRequestError("模型请求超时。") from error
         except OpenAIError as error:
             status = getattr(error, "status_code", None)
             reason = f"HTTP {status}" if status else type(error).__name__
-            raise RuntimeError(f"模型 {alias} 请求失败（{reason}）。") from error
+            raise ModelRequestError(f"模型 {alias} 请求失败（{reason}）。") from error
 
         if not response.choices:
             raise RuntimeError(f"模型 {alias} 没有返回回复。")
@@ -88,8 +106,34 @@ def create_model(config: dict, alias: str) -> Complete:
         choice = response.choices[0]
         if choice.finish_reason == "length":
             raise RuntimeError("模型回复达到长度限制，请缩小问题范围后重试。")
-        if choice.finish_reason != "stop" or choice.message.role != "assistant":
+        if choice.finish_reason not in {"stop", "tool_calls"} or choice.message.role != "assistant":
             raise RuntimeError("模型没有返回完整的对话回复。")
-        return choice.message.content
+        calls = []
+        for call in choice.message.tool_calls or ():
+            if call.type != "function" or not isinstance(call.id, str) or not isinstance(call.function.name, str):
+                raise RuntimeError("模型返回了无法识别的工具调用。")
+            arguments = call.function.arguments
+            if not isinstance(arguments, str):
+                raise RuntimeError("模型返回了无法回传的工具参数。")
+            calls.append(ToolCall(call.id, call.function.name, arguments))
+        if choice.finish_reason == "tool_calls" and not calls:
+            raise RuntimeError("模型报告了工具调用，但响应中缺少调用内容。")
+
+        usage = getattr(response, "usage", None)
+        details = getattr(usage, "prompt_tokens_details", None)
+        cached = getattr(details, "cached_tokens", None)
+        if cached is None:
+            cached = getattr(usage, "prompt_cache_hit_tokens", None)
+        return ModelReply(
+            choice.message.content,
+            tuple(calls),
+            RequestUsage(
+                model=alias,
+                input_tokens=getattr(usage, "prompt_tokens", None),
+                output_tokens=getattr(usage, "completion_tokens", None),
+                cached_input_tokens=cached,
+                tool_schema_bytes=schema_size(tools) if tools else 0,
+            ),
+        )
 
     return complete
