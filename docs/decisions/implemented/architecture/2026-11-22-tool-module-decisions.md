@@ -1,10 +1,10 @@
-# Agent Note · Tool 模块设计与评审处置
+# 决策记录 · Tool 模块设计与评审处置
 
 状态：implemented
 
 ## 背景与要保留的信息
 
-Tool 模块的实现跨工具定义、执行、Agent Loop、Session 审批交接和工作区文件边界。以后扩展内置/MCP 工具、改变授权或调整模块文档时，需要保留这些决策来由和代码评审发现；当前行为、接口与验证入口集中在[模块说明](../../../../docs/modules/tools.md)，已确认行为要求在[当前 Spec](../../../../docs/specs/tools.md)。模块文档的职责边界见[模块文档归属 Note](2026-11-22-module-document-ownership.md)。
+Tool 模块的实现跨工具定义、执行、Agent Loop、Session 审批交接和工作区文件边界。以后扩展内置/MCP 工具、改变授权或调整模块文档时，需要保留这些决策来由和代码评审发现；当前行为、接口与验证入口集中在[模块说明](../../../../docs/modules/tools.md)，已确认行为要求在[当前 Spec](../../../../docs/specs/tools.md)。模块文档的职责边界见[文档归属规则](../../../../docs/rules/documentation.md)。
 
 ## 决定与理由
 

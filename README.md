@@ -6,10 +6,12 @@ MiniCC 是通用 Agent Harness。现阶段用学校和个人项目中的真实�
 
 ## 在这个仓库协作
 
-从 [AGENTS.md](AGENTS.md) 开始。Claude Code 共用这份规则。
+本仓库使用 Codex 协作。[AGENTS.md](AGENTS.md) 是自动读取的项目入口，并指向[分类规则](docs/rules/README.md)；通用开发工作流使用个人 Codex 安装的 Superpowers Skills。项目流程和取舍见[开发流程规范](docs/workflow/development-process-spec.md)与[项目决策记录](docs/decisions/README.md)。
 
 你可以先给出要解决的问题，与 Agent 一起确定方案和验收方式。准备好后，明确告诉 Agent 要写 spec、开始实现，或两项都做。产品实现后先由你体验，Agent 再做功能测试和评测。验收后由你决定是否提交或推送。
 
-- [按阶段查开发、分工与验收流程](.agents/skills/README.md)
+- [Codex 项目设置与外部插件](docs/workflow/codex-setup.md)
+- [查开发与验收流程](docs/workflow/development-process-spec.md)
+- [查分类项目规则](docs/rules/README.md)
 - [查模块实现与当前 spec](docs/architecture.md#模块文档)
-- [查用户指定保留的讨论与取舍](.agents/notes/README.md)
+- [查项目决策与取舍](docs/decisions/README.md)

@@ -2,7 +2,7 @@
 
 状态：当前实现已完成定向功能测试；真实模型任务评测和用户体验验收仍待完成。
 
-当前确认的行为要求见[工具模块 spec](../specs/tools.md)。重要取舍和 Review 处置见[Agent Note](../../.agents/notes/implemented/architecture/2026-11-22-tool-module-decisions.md)。
+当前确认的行为要求见[工具模块 spec](../specs/tools.md)。重要取舍和 Review 处置见[项目决策记录](../decisions/implemented/architecture/2026-11-22-tool-module-decisions.md)。
 
 ## 目标与边界
 

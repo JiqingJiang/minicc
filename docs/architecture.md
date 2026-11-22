@@ -45,8 +45,11 @@ MiniCC/
 │   ├── goal.md
 │   ├── architecture.md
 │   ├── specs/                   # 各模块当前有效的已确认 spec
-│   └── modules/                 # 各模块实际设计、实现逻辑和验证
-└── .agents/                     # 开发流程、上下文加载与决策记录
+│   ├── modules/                 # 各模块实际设计、实现逻辑和验证
+│   ├── rules/                   # 按主题维护的持续项目约束
+│   ├── workflow/                # 项目协作和 Codex 设置说明
+│   └── decisions/               # 项目决策依据、取舍和后续条件
+└── .codex/                      # Codex 项目设置与 Hooks（按需建立）
 ```
 
 ## 实现边界
@@ -63,4 +66,4 @@ MiniCC/
 
 ## 模块文档
 
-当前有效的模块 spec 放在 `docs/specs/<模块名>.md`；模块实际设计、实现逻辑、边界、运行方式和验证证据放在 `docs/modules/<模块名>.md`。重要方案取舍、问题根因、Code Review 发现及修复结论精简记录在[Agent Notes](../.agents/notes/README.md)，模块文档和 spec 链接相关记录，避免复制整段过程。
+当前有效的模块 spec 放在 `docs/specs/<模块名>.md`；模块实际设计、实现逻辑、边界、运行方式和验证证据放在 `docs/modules/<模块名>.md`。重要方案取舍、问题根因、Code Review 发现及修复结论精简记录在[项目决策记录](decisions/README.md)，模块文档和 spec 链接相关记录，避免复制整段过程。

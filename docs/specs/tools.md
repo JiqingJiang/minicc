@@ -2,7 +2,7 @@
 
 状态：当前已确认范围；实现已完成定向离线测试，用户体验和真实任务评测待验收。
 
-模块实现和验证证据见[工具模块说明](../modules/tools.md)。重要设计理由和问题处置见[Agent Note](../../.agents/notes/implemented/architecture/2026-11-22-tool-module-decisions.md)。
+模块实现和验证证据见[工具模块说明](../modules/tools.md)。重要设计理由和问题处置见[项目决策记录](../decisions/implemented/architecture/2026-11-22-tool-module-decisions.md)。
 
 ## 目标与范围
 

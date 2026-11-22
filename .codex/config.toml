@@ -1,0 +1,4 @@
+# Project-specific Codex settings.
+# The Superpowers plugin itself is installed in the user's Codex environment.
+[plugins."superpowers@openai-curated"]
+enabled = true

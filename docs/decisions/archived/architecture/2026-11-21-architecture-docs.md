@@ -1,4 +1,4 @@
-# Agent Note · 目标与架构文档旧稿
+# 历史归档 · 目标与架构文档旧稿
 
 状态：archived
 
@@ -51,7 +51,7 @@
 
 - [项目目标](project-goal.md)
 - [代码目录组织](code-organization.md)
-- [架构讨论记录](../.agents/notes/proposed/architecture/2026-11-21-harness-architecture.md)
+- 旧版架构讨论记录已归档；当前约定见[项目决策记录](../../README.md)。
 - [模块文档入口](modules/README.md)
 
 ## 1. 架构由哪些使用场景驱动
@@ -250,7 +250,7 @@ Memory、Skill、MCP、Hooks、SubAgent 和 Team 根据后续任务拉动建立�
 | `spec.md` | 用户已经同意整理成 spec 的本轮设计。写范围、行为、约束、验收与评测计划。 |
 | `evaluation.md` | 需要复查的功能测试与深度评测记录，附版本、命令、结果和已知限制。按模块实际需要建立。 |
 
-运行和实现细节在模块目录维护。需要追溯某个设计取舍时，从模块文档链接到 [Agent Notes](../../.agents/notes/README.md)。
+运行和实现细节在模块目录维护。需要追溯某个设计取舍时，从模块文档链接到项目决策记录。
 ~~~~
 
 ## `docs/modules/_template.md`
@@ -276,5 +276,5 @@ Memory、Skill、MCP、Hooks、SubAgent 和 Team 根据后续任务拉动建立�
 
 ## 相关决策
 
-<链接已存在的 spec 和有助于理解来由的 Agent Note。>
+<链接已存在的 spec 和有助于理解来由的决策记录。>
 ~~~~
