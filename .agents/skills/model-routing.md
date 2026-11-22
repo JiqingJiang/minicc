@@ -32,6 +32,6 @@ Codex 提供 `luna_worker` 时优先使用该角色。客户端仅支持指定�
 
 主 Agent 核对改动范围、实际差异和子任务证据。产品的用户体验与正式验证由主 Agent 统一交接。若 Luna 发现需求歧义、共享边界冲突或需要新取舍，应暂停该部分并把具体问题、影响和待选方案交回主 Agent，不要自行扩大范围。
 
-完成实现后按[评审与交付流程](review-change/SKILL.md)复查。
+完成实现后按[开发流程](develop-change/SKILL.md)中的测试、Code Review 和用户验收阶段复查。
 
 参考 [Codex 子 Agent 文档](https://learn.chatgpt.com/docs/agent-configuration/subagents)。
