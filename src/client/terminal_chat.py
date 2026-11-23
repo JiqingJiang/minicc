@@ -36,6 +36,20 @@ def _console(*, color: bool | None = None) -> Console:
     )
 
 
+def _show_welcome(active_model: str) -> None:
+    console = _console()
+    logo = (
+        "███╗   ███╗██╗███╗   ██╗██╗ ██████╗ ██████╗\n"
+        "████╗ ████║██║████╗  ██║██║██╔════╝██╔════╝\n"
+        "██╔████╔██║██║██╔██╗ ██║██║██║     ██║\n"
+        "██║╚██╔╝██║██║██║╚██╗██║██║██║     ██║\n"
+        "██║ ╚═╝ ██║██║██║ ╚████║██║╚██████╗╚██████╗\n"
+        "╚═╝     ╚═╝╚═╝╚═╝  ╚═══╝╚═╝ ╚═════╝ ╚═════╝"
+    )
+    console.print(f"[bold bright_cyan]{logo}[/]")
+    console.print(f"[dim]Agent Harness · {active_model} · {Path.cwd()}[/]\n")
+
+
 def _print_tool_start(call: ToolCall, arguments: dict, *, color: bool) -> None:
     params = json.dumps(arguments, ensure_ascii=False, indent=2)
     if color:
@@ -166,12 +180,13 @@ def run_terminal_chat(
     session.set_tool_observer(lambda call, arguments: _print_tool_start(call, arguments, color=color))
     session.set_tool_result_observer(lambda call, result: _print_tool_result(call, result, color=color))
     if terminal:
+        _show_welcome(active_model)
         _console(color=color).print("[dim]输入 /model 选择模型 · /new 开始新聊天 · /memory 管理记忆 · /task 管理任务状态 · /context 查看来源记录 · /cancel 结束当前轮 · Ctrl+D 退出[/]")
 
     try:
         while True:
             if terminal:
-                _console(color=color).print(f"\n[bold cyan]你[/] [dim][{active_model}][/] › ", end="")
+                _console(color=color).print(f"\n[bold bright_cyan]›[/] [dim][{active_model}][/] ", end="")
                 line = input()
             else:
                 line = input()
