@@ -1,5 +1,6 @@
 import json
 import os
+from functools import lru_cache
 from pathlib import Path
 
 from src.harness.agent_loop.run_turn import Complete, Message, ModelReply, ModelRequestError, RequestUsage
@@ -137,3 +138,40 @@ def create_model(config: dict, alias: str) -> Complete:
         )
 
     return complete
+
+
+def create_memory_embedder(config: dict):
+    """Build a lazy, on-device FastEmbed model for memory vectors."""
+    settings = config.get("memory_embeddings")
+    if settings is False:
+        return None
+    if settings is not None and not isinstance(settings, dict):
+        raise ValueError("memory_embeddings 配置必须是对象。")
+    settings = settings or {}
+    model_name = settings.get("model", "BAAI/bge-small-zh-v1.5")
+    cache_dir = settings.get("cache_dir")
+    if not isinstance(model_name, str) or not model_name.strip():
+        raise ValueError("memory_embeddings.model 必须是非空字符串。")
+    if cache_dir is not None and (not isinstance(cache_dir, str) or not cache_dir.strip()):
+        raise ValueError("memory_embeddings.cache_dir 必须是非空路径。")
+    class LocalMemoryEmbedder:
+        @lru_cache(maxsize=1)
+        def _model(self):
+            try:
+                from fastembed import TextEmbedding
+            except ModuleNotFoundError as error:
+                raise RuntimeError("本地 Memory 向量检索需要安装 FastEmbed；请重新安装 requirements.txt 中的依赖。") from error
+            return TextEmbedding(model_name=model_name.strip(), cache_dir=cache_dir)
+
+        def __call__(self, text: str) -> tuple[str, list[float]] | None:
+            return self.embed_many([text])[0]
+
+        def embed_many(self, texts: list[str]) -> list[tuple[str, list[float]] | None]:
+            vectors = self._model().embed(texts)
+            return [
+                (self.model_name, [float(value) for value in vector.tolist()])
+                for vector in vectors
+            ]
+
+    LocalMemoryEmbedder.model_name = f"fastembed:{model_name.strip()}"
+    return LocalMemoryEmbedder()

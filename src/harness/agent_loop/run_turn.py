@@ -2,6 +2,7 @@ from collections.abc import Callable, Generator
 from dataclasses import dataclass, field
 from time import monotonic
 from typing import Literal, TypedDict
+from uuid import uuid4
 
 from src.harness.tools.executor import PendingApproval, ToolExecutor, fingerprint_arguments
 from src.harness.tools.registry import ToolRegistry
@@ -11,6 +12,7 @@ from src.harness.tools.base import BaseTool, ToolCall, ToolResult, ToolTimeout
 class _MessageContent(TypedDict, total=False):
     tool_calls: tuple[ToolCall, ...]
     call_id: str
+    _source_turn_id: str
 
 
 class Message(_MessageContent):
@@ -56,11 +58,12 @@ TurnPause = ApprovalRequest | RetryRequest
 TurnDriver = Generator[TurnPause, bool | None, str]
 
 _TOOL_APPROVAL_POLICY = (
-    "MiniCC 当前默认提供 read、write、edit、tool_search、bash、glob、grep 七种工具。"
+    "启用工作区工具时，MiniCC 提供 read、write、edit、tool_search、bash、glob、grep。"
     "创建或覆盖文件调用 write，精确修改现有文件调用 edit；命令操作调用 bash。"
     "write、edit 和每一条 bash 命令都会触发宿主真实审批。不要只用文字声称正在等待批准；"
     "只有宿主返回实际审批请求后，才可以说操作正在等待用户决定。宿主会展示预览或完整命令并暂停。"
-    "在获批前不得声称副作用已执行，也不得绕过审批。"
+    "在获批前不得声称文件/命令副作用已执行，也不得绕过审批。memory_remember 按工具说明自动记录有长期价值的信息；"
+    "memory_search 用于自动召回之外的定向查询。普通闲聊不要写入记忆。"
 )
 
 
@@ -74,8 +77,10 @@ class TurnLimits:
 @dataclass
 class TurnRecord:
     messages: list[Message]
+    turn_id: str = field(default_factory=lambda: uuid4().hex)
     usage: list[RequestUsage] = field(default_factory=list)
     model_requests: int = 0
+    context_traces: list[dict] = field(default_factory=list)
 
 
 def _fingerprint(call: ToolCall) -> tuple[str, str]:
@@ -90,6 +95,7 @@ def run_turn(
     limits: TurnLimits,
     on_tool_start: Callable[[ToolCall, dict], None] | None = None,
     on_tool_result: Callable[[ToolCall, ToolResult], None] | None = None,
+    assemble_context: Callable[[list[Message], tuple[BaseTool, ...]], tuple[list[Message], dict]] | None = None,
 ) -> TurnDriver:
     deadline = monotonic() + limits.seconds
 
@@ -123,16 +129,32 @@ def run_turn(
         ]
         if final_only and registry is not None:
             messages.append({"role": "user", "content": "本轮工具阶段已结束。请根据已有结果报告进展和未完成事项。"})
+        trace = {}
+        if assemble_context is not None:
+            messages, trace = assemble_context(messages, offered)
+            turn.context_traces.append(trace)
         try:
             checkpoint()
             turn.model_requests += 1
             reply = complete(messages, offered, min(60, max(0.001, deadline - monotonic())))
             if reply.usage is not None:
                 turn.usage.append(reply.usage)
+                if trace:
+                    trace["model"] = reply.usage.model
+                    trace["actual_input_tokens"] = reply.usage.input_tokens
+                    trace["actual_output_tokens"] = reply.usage.output_tokens
+                    trace["cached_input_tokens"] = reply.usage.cached_input_tokens
+                    trace["tool_schema_bytes"] = reply.usage.tool_schema_bytes
+            if trace and callable(trace.get("_record")):
+                trace.pop("_record")(trace)
             checkpoint()
         except ToolTimeout:
+            if trace and callable(trace.get("_record")):
+                trace.pop("_record")(trace)
             return "本轮已达到执行时间上限。已完成的工具结果已保留。"
         except ModelRequestError as error:
+            if trace and callable(trace.get("_record")):
+                trace.pop("_record")(trace)
             if final_only:
                 return f"本轮停止。{error}已完成的工具结果已保留。"
             yield from pause(RetryRequest(str(error)))

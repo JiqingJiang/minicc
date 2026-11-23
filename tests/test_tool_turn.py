@@ -68,7 +68,15 @@ class ToolTurnTests(TestCase):
         self.assertEqual(session.retry(), "verified")
         self.assertIn("done", requests[3][0][-1]["content"])
         self.assertEqual(session.send("continue"), "next turn")
-        self.assertEqual([message["role"] for message in requests[-1][0]], ["system", "user", "assistant", "user"])
+        next_request = requests[-1][0]
+        self.assertEqual(
+            [message["role"] for message in next_request],
+            ["system", "user", "assistant", "tool", "assistant", "tool", "assistant", "user"],
+        )
+        self.assertEqual(
+            [message["call_id"] for message in next_request if message["role"] == "tool"],
+            ["patch", "verify"],
+        )
 
     def test_tool_enabled_model_requests_include_approval_policy(self):
         session, requests = scripted_session(self.root, ModelReply("ready"))

@@ -1,48 +1,45 @@
 # Agent Loop
 
-当前切片支持在同一个终端会话里进行多轮文本对话。
+本模块把一轮用户输入推进为模型请求、工具调用、审批/重试暂停和最终答复。实现入口是 [`run_turn.py`](../../src/harness/agent_loop/run_turn.py)，会话编排与落盘见 [`chat_session.py`](../../src/runtime/session/chat_session.py)，Context 组装见 [Memory 与 Context](memory-context.md)，工具边界见[工具模块](tools.md)。当前只实现单进程终端会话；没有运行时重启后的活动轮次续跑。
 
-- [Runtime](../../src/runtime/session/chat_session.py) 接收输入，每次组合已完成的历史和新的用户消息。同一会话同时处理一轮。成功时一起提交用户消息和完整回复，失败时可重发原消息。
-- [Agent Loop](../../src/harness/agent_loop/run_turn.py) 在模型、工具和用户审批之间循环推进：检查模型返回的工具调用，执行或暂停审批，把每个工具结果按调用 ID 回填，然后继续请求模型，直到给出最终答复、等待用户或触及预算。
-- [模型适配器](../../src/adapters/models/litellm_model.py) 调用 LiteLLM 的 `completion()`，由 SDK 按模型路由处理上游请求协议，向 Loop 返回统一的文本回复。请求使用非流式模式。
-- [启动入口](../../src/app/chat.py) 将终端、Runtime 和模型适配器装配在同一个本地进程里。会话历史保存在进程内存中。
-- 工具工作区固定为启动命令时所在的目录；模型配置默认从 MiniCC 项目目录读取 `models.json`。
+## 职责与流程
 
-## 运行与体验
+- [`chat.py`](../../src/app/chat.py) 从当前工作目录确定项目身份，装配模型、Memory、Context、工具注册表和持久化会话。`--chat-only` 关闭工作区工具，但仍注册记忆工具。
+- `ChatSession.send()` 在同一会话只有一轮活动任务的条件下启动 `run_turn()`。已完成轮次的全部原始消息（包括工具调用与工具结果）作为历史传入，并标记来源轮次 ID。轮次完成或部分中止后写入 `session.json`；加载时重建工具调用结构。
+- `run_turn()` 为每次请求计算当前可提供工具，调用可选 Context 装配器，随后调用模型适配器。模型返回工具调用时，Loop 校验 ID 唯一性，逐个交执行器；工具结果用原调用 ID 回填后继续请求模型。没有工具调用时返回最终文本。
+- 需要批准的操作通过 Generator 暂停，`ChatSession.answer_approval()` 恢复执行；模型请求错误通过 `RetryRequest` 暂停，`retry()` 重试模型请求。审批等待期间暂停活动时限计时。取消会关闭 Generator，并为未完成工具调用补充中止结果，避免会话历史留下未配对调用。
+- 每次模型请求前 `ContextAssembler` 组合指令、任务状态、相关记忆、历史与工具定义，并可裁剪旧历史。模型用量与 Context 来源写入本轮记录；trace 由 Context 组件追加到本地 JSONL。
 
-使用 Python 3.10 或以上版本。在虚拟环境中从仓库根目录安装依赖。启动默认模型前，将 DeepSeek API 密钥配置到环境变量 `DEEPSEEK_API_KEY`。
+## 边界、预算与失败处理
+
+- 一轮默认最多 12 次模型请求、24 次工具尝试和 180 秒活动时间；单次模型调用最长 60 秒。审批等待和用户重试等待不计入活动时限。
+- 最后一轮请求或工具尝试预算耗尽后进入仅答复阶段，不再提供工具。超时、预算耗尽、拒绝、重复调用和工具异常会以文本或带错误码的工具结果结束/继续本轮；模型请求异常提供重试暂停。工具结果保持原调用 ID。
+- 同一轮内拒绝过的相同操作不会再次弹审批；已批准操作不会重复执行。连续相同调用得到相同结果时会被提示，重复达到上限后返回重复调用结果。
+- Context token 数是请求前估算，不作为模型服务端 token 计费值。实际用量只在适配器返回时可用。Trace 写入失败及会话写入失败记录日志，不改变用户请求结果，因此调用成功不保证对应文件已经持久化。
+- 会话 JSON 损坏或格式不兼容时，加载明确报错；写入错误则记录日志继续运行。`/new` 归档旧会话和任务状态并创建新 ID，但目前没有终端命令恢复归档会话或任务。进程退出时，活动中的审批/重试状态不持久化。
+- 内置 Bash 虽由 Loop 等待用户审批，但没有 OS 沙箱；审批不能限制命令的当前用户权限。其他工作区边界见[工具模块](tools.md)。
+
+## 实际对话测试发现
+
+用户提供的 Memory 对话记录还暴露了以下跨模块问题；Memory 写入与纠正细节见 [Memory 与 Context](memory-context.md)。这些是已观察到的模型输出/上下文缺口，不代表执行层已经强制保证相同行为。
+
+- **当前模型身份没有作为可信上下文提供。**终端知道所选别名，适配器用配置路由请求，但发给模型的消息中没有当前别名和路由信息。因此模型回答“具体是哪家的模型无法确知”符合它可见信息的限制，却没有利用宿主已知的事实。第一次回答时终端菜单显示 `deepseek-flash` 为当前模型；Agent 没有收到此元数据。
+- **工具清单总数不可靠。**工作区注册七种工具，应用再注册 `memory_remember` 和 `memory_search`，这次运行共九种注册工具；模型回答八种。工具 Schema 会发给模型，但没有额外提供经宿主生成的完整名称清单/计数，且工具预算过滤后本轮可用集合可能变化，模型自行计数不应作为权威状态。
+- **审批说明把范围说宽了。**当前 Loop 提示明确说明 `write`、`edit` 和每条 `bash` 命令要审批，并说明 `memory_remember` 自动记录；用户看到的“所有有副作用的操作都会先预览并获批”不准确。`memory_remember` 以及终端 `/memory edit`、`/memory delete` 会直接更新记忆，不经过该审批暂停流程。工具授权与记忆持久化策略应分别说明。
+- **工具失败没有阻止 Agent 对记忆状态作出确定陈述。**记录中多次出现 `MEMORY_REJECTED`；Agent 先说“都记下了”，后来又把未验证的召回顺序和纠错结果描述为确定事实。Loop 将工具错误回填模型，但不验证最终自然语言是否与真实工具结果一致。真实模型评测应覆盖“失败后停止并如实报告”，而不只检查工具错误码。
+- **检索结果不能替代纠错确认。**即使 Context 把当前用户消息排在 Memory 前面，当前模型仍在收到“我是蒋继庆，你说错了”后回复“庆”，且未触发工具更新。提示中的优先级目前是指令文本，不是强制状态转换或输出校验。
+- **根据有限资料推断年龄/毕业时间。**Agent 根据出生日期、研三和找工作状态推断“研究生毕业是 25/26 岁、时间线吻合”，但记录里没有毕业时间，也不足以推出具体毕业年龄。这类补充不是记忆检索结果，应标成不确定或不作推断。
+
+本次记录还显示，用户从 `/memory list` 得到项目范围空结果，随后 `/memory global list` 才看到全局记录；这是范围默认行为，属于 Memory 文档中记录的反馈歧义。jieba 首次加载的终端日志也不属于 Agent Loop 的模型回复。
+
+## 运行和验证
+
+从仓库根目录安装依赖后，可用 `python3 -B -m src.app.chat` 启动终端。模型由 `models.json` 与 `MINICC_MODEL` 选择，凭据从相应环境变量读取；工作区为启动时的当前目录。
+
+离线回归命令：
 
 ```sh
-python3 -m pip install -r requirements.txt
-python3 -B -m src.app.chat
+python3 -B -m unittest discover -s tests -v
 ```
 
-进入 MiniCC 项目目录后直接运行，不需要传 `--workspace`。如果从其他目录调用已安装或可导入的 MiniCC，工具会以那个目录作为工作区。
-
-先发「请在这段对话里记住代号是松果七号，只回复收到。」再发「刚才的代号是什么？」。第二轮应答出「松果七号」。输入 `Ctrl+D` 结束会话。`Ctrl+C` 也会退出，并中止正在等待的请求。
-
-## 注册和切换模型
-
-在 [models.json](../../models.json) 的 `models` 中按别名添加条目。`model` 填 LiteLLM 路由，`api_key_env` 填供应商密钥所在的环境变量名。`api_base_env` 指定服务地址所在的环境变量，有值时优先使用，否则依次使用 `api_base` 和供应商默认地址。额外请求字段可用 `extra_body`。密钥通过环境变量读取。
-
-默认别名由 `default` 指定。启动前可用 `MINICC_MODEL` 选择已注册的别名，用 `MINICC_MODELS_CONFIG` 指定另一份 JSON 配置。`provider_label` 可以自定义菜单中显示的供应商名称。
-
-聊天中输入 `/model`，再输入编号或模型别名，空行返回。也可以直接输入 `/model bailian`、`/model deepseek-flash` 或 `/model glm`。切换从下一条消息生效，新模型会收到当前会话的历史。缺少密钥的模型会在菜单里标出，切换失败时继续使用当前模型。
-
-| 厂商       | `MINICC_MODEL`                          | 密钥变量             | 地址变量                    |
-| ---------- | ----------------------------------------- | -------------------- | --------------------------- |
-| 阿里云百炼 | `bailian`                               | `BAILIAN_API_KEY`  | `BAILIAN_OPENAI_BASE_URL` |
-| DeepSeek   | `deepseek-flash` 或 `deepseek-v4-pro` | `DEEPSEEK_API_KEY` | `DEEPSEEK_BASE_URL`       |
-| 智谱 GLM   | `glm`                                   | `GLM_API_KEY`      | `GLM_BASE_URL`            |
-
-例如，运行 `MINICC_MODEL=glm python3 -B -m src.app.chat` 启动智谱 GLM。百炼地址使用 Key 所在地域的 OpenAI 兼容地址。GLM Coding Plan 地址通过 `GLM_BASE_URL` 指定。参见 [百炼接口说明](https://help.aliyun.com/zh/model-studio/compatibility-of-openai-with-dashscope) 和 [LiteLLM 的智谱接入说明](https://docs.litellm.ai/docs/providers/bigmodel)。
-
-| 上游协议           | 路由示例                                                                                                                                                       |
-| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Chat Completions   | `dashscope/qwen-flash`、`deepseek/deepseek-flash`、`bigmodel/glm-5.3`、`openai/gpt-4.1-mini`，或使用 `openai/<模型 ID>` 加 `api_base` 接入兼容服务 |
-| Anthropic Messages | `anthropic/claude-sonnet-5`                                                                                                                                  |
-| OpenAI Responses   | `openai/responses/gpt-6-luna`                                                                                                                                |
-
-路由和协议转换由 [LiteLLM Python SDK](https://docs.litellm.ai/docs/python_sdk) 提供。OpenAI Responses 使用 [SDK 的 Chat Completions 到 Responses 转换](https://docs.litellm.ai/docs/providers/openai#openai-chat-completion-to-responses-api-bridge)。每次模型请求都包含本轮的工具调用及其结果；跨已完成轮次只带入用户消息和最终助理回复。工具交互不进入后续轮次的聊天历史。
-
-当前默认提供 `read`、`write`、`edit`、`tool_search`、`bash`、`glob`、`grep` 七个工具。`write`、`edit` 以及每条 `bash` 命令都需要真实工具调用并经终端 yes/no 审批，回车默认拒绝。Bash 展示命令和工作目录，但以当前用户权限运行，未做 OS 级隔离。模型只用文字表示“等待批准”不构成待审批操作；此时输入 y/n 会被终端拦截并提示重新发起工具调用。工具实现与工作区边界见[工具系统说明](tools.md)。
+`tests/test_tool_turn.py` 覆盖 Loop 的工具调用、审批和预算路径；`tests/test_terminal_approval.py` 覆盖终端审批交互；`tests/test_memory.py` 覆盖记忆存储的部分边界。测试不访问真实模型。会话重启恢复、Context 裁剪/trace 和真实模型端到端质量仍需单独验收。

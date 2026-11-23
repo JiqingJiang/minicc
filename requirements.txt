@@ -3,3 +3,5 @@ jsonschema==4.26.0
 
 rich>=13.7.0,<15
 regex>=2024.11.6,<2027
+jieba>=0.42.1,<0.43
+fastembed>=0.7,<1
