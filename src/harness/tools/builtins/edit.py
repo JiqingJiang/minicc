@@ -10,7 +10,7 @@ from src.harness.tools.base import ApprovalAction, BaseTool, ToolFailure
 
 class EditTool(BaseTool):
     name = "edit"
-    description = "Replace one exact and unique text span in a workspace file after approval."
+    description = "Edit exact text after approval."
     parameters = {
         "type": "object",
         "properties": {

@@ -10,7 +10,7 @@ from src.harness.tools.base import ApprovalAction, BaseTool, ToolFailure
 
 class WriteTool(BaseTool):
     name = "write"
-    description = "Create or replace a UTF-8 text file in the workspace after approval."
+    description = "Write after approval."
     parameters = {
         "type": "object",
         "properties": {

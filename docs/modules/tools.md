@@ -8,7 +8,7 @@
 
 工具模块把模型的工具调用转换成经校验、受预算约束、带结果证据的本地操作。内置文件工具只在启动时确定的工作区内工作；会修改文件或运行命令的操作必须先展示内容并等待用户批准。
 
-当前实现覆盖工作区文件读取/写入、精确编辑、文件名与文本搜索、工具发现和 Bash 命令。Runtime 负责会话和审批等待，Agent Loop 负责模型/工具迭代，工具执行器负责统一校验和执行。Bash 通过明确审批取得授权，但没有 OS 沙箱，仍以当前用户权限访问工作区以外的文件和网络。
+当前实现覆盖工作区文件读取/写入、精确编辑、文件名与文本搜索、工具发现和 Bash 命令；应用装配时还注册 `memory_remember` 与 `memory_search`。`--chat-only` 只关闭工作区工具，仍保留记忆工具。Runtime 负责会话和审批等待，Agent Loop 负责模型/工具迭代，工具执行器负责统一校验和执行。Bash 通过明确审批取得授权，但没有 OS 沙箱，仍以当前用户权限访问工作区以外的文件和网络。
 
 ## 模块结构与职责
 
@@ -18,13 +18,14 @@
 | [`registry.py`](../../src/harness/tools/registry.py) | 按稳定顺序注册工具、按名称查找、拒绝重复名称。 |
 | [`executor.py`](../../src/harness/tools/executor.py) | 筛选可提供工具、校验 Schema 与 JSON 参数、执行、审批恢复、结果截断和异常归一化。 |
 | [`builtins/`](../../src/harness/tools/builtins/) | 各内置工具的输入、说明、预览和操作实现。 |
+| [`memory/`](../../src/harness/memory/) | `memory_remember` 和 `memory_search` 负责记忆写入及定向检索；具体存储和范围规则见 [Memory 与 Context](memory-context.md)。 |
 | [`workspace.py`](../../src/harness/permission/workspace.py) | 工作区相对路径、敏感路径保护、无链接文件访问、受限读取/扫描和原子文件发布。 |
 | [`run_turn.py`](../../src/harness/agent_loop/run_turn.py) | 模型工具循环、调用 ID 配对、重试、审批暂停、重复调用和轮次预算。 |
 | [`chat_session.py`](../../src/runtime/session/chat_session.py) | 保留活动轮次，接受审批/重试/取消，并将完整或部分结果并入会话历史。 |
 | [`terminal_chat.py`](../../src/client/terminal_chat.py) | 展示工具参数、结果、审批预览和用户决定。 |
 | [`litellm_model.py`](../../src/adapters/models/litellm_model.py) | 在 MiniCC 消息与 LiteLLM 工具调用协议之间转换并提取请求用量。 |
 
-默认工具由 [`create_builtin_registry()`](../../src/harness/tools/builtins/__init__.py) 按固定顺序装配：
+工作区工具由 [`create_builtin_registry()`](../../src/harness/tools/builtins/__init__.py) 按固定顺序装配；应用入口再注册两项记忆工具：
 
 | 工具 | 行为 | 审批 |
 | --- | --- | --- |
@@ -35,16 +36,18 @@
 | `bash` | 在工作区目录启动 Bash，展示完整命令和工作目录。 | 每条命令 |
 | `glob` | 按工作区相对模式列出文件。 | 否 |
 | `grep` | 在工作区 UTF-8 文本中按正则表达式搜索。 | 否 |
+| `memory_remember` | 保存有长期价值的偏好、纠正、项目事实、决定、流程或参考项。 | 否 |
+| `memory_search` | 按查询检索当前全局与项目记忆。 | 否 |
 
 ## 一次工具调用如何工作
 
 1. Loop 使用执行器筛过的工具定义调用模型。定义无效或超出单次请求 3,600 UTF-8 字节 Schema 预算的工具不会提供给模型。
 2. LiteLLM 适配器把回复转换为 `ToolCall(call_id, name, arguments)`。Loop 检查调用 ID 不为空且不重复，再由执行器严格解析 JSON、拒绝重复对象键和非有限数字，并按 JSON Schema 校验参数。
-3. 普通工具立即执行。`write`、`edit`、`bash` 先创建 `PendingApproval` 和可展示的预览，Session 暂停当前 Generator；终端默认拒绝，只有明确 yes 才继续执行。拒绝会作为带原调用 ID 的结构化结果回填。
-4. 执行结果或安全错误都以原 `call_id` 回填模型。意外异常不泄露 traceback；工具输出有长度上限。工具结果只属于当前轮次，不进入之后已完成轮次的聊天历史。
+3. 普通工具立即执行。`write`、`edit`、`bash` 先创建 `PendingApproval` 和可展示的预览，Session 暂停当前 Generator；终端默认拒绝，只有明确 yes 才继续执行。拒绝会作为带原调用 ID 的结构化结果回填。Memory 工具也走同一参数与错误归一化路径，但不触发审批。
+4. 执行结果或安全错误都以原 `call_id` 回填模型。意外异常不泄露 traceback；工具输出有长度上限。完整工具调用与结果保存在会话历史，后续请求可将其作为历史证据传入；Context 可在单次请求中裁剪大型结果，原始会话记录仍保留。详见 [Agent Loop](agent-loop.md) 与 [Memory 与 Context](memory-context.md)。
 5. 模型请求失败返回可重试暂停；重试会保留已执行结果，不重新执行成功工具。用户可取消当前轮；Session 为尚无最终结果的调用补上中止记录。
 
-Schema 校验属于执行边界而不是注册表：所有工具在“提供给模型”和“实际执行”两个边界都会验证定义。这样搜索结果与真实可用能力保持一致，坏定义不会阻塞其他工具或被执行。
+Schema 校验属于执行边界而不是注册表：所有工具在“提供给模型”和“实际执行”两个边界都会验证定义。这样搜索结果与真实可用能力保持一致，坏定义不会阻塞其他工具或被执行。`tool_search` 只搜索已注册且符合 Schema 预算的工具；它不会动态加载工具。
 
 ## 工作区访问与审批写入
 
@@ -64,6 +67,8 @@ Schema 校验属于执行边界而不是注册表：所有工具在“提供给�
 - 默认单轮最多 12 次模型请求、24 次工具尝试和 180 秒活动执行时间。审批和用户重试等待时间不计入活动截止时间。
 - 拒绝、无效参数、未提供工具、重复调用、时间/调用预算耗尽和工具异常均返回可识别的工具结果，避免模型侧调用记录失配。
 
+Memory 工具的具体内容限制、来源标记和范围隔离由 Memory 模块负责；写入拒绝或搜索参数错误以工具错误码返回。自动 Context 召回不依赖模型发起 `memory_search`，二者使用同一个管理器。
+
 ## 运行与验证
 
 启动入口见 [`chat.py`](../../src/app/chat.py)。从仓库根目录安装 [requirements.txt](../../requirements.txt) 后执行：
@@ -74,10 +79,10 @@ python3 -B -m src.app.chat
 
 工作区取当前命令目录；传 `--chat-only` 可关闭工具。
 
-离线回归检查：
+离线回归检查（覆盖工具调用、审批和记忆存储）：
 
 ```sh
 .venv/bin/python -B -m unittest discover -s tests -v
 ```
 
-2026-11-22 在本工作区执行，**29 项通过**。新增用例覆盖正则超时、交换发布期间的并发文件变化、原子回滚失败和回滚期间再次并发修改。LiteLLM 启动时尝试联网读取价格表失败，使用本地备份；测试没有调用真实模型。用户体验验收与可评分的真实模型任务评测仍待执行。
+2026-11-22 在本工作区执行结果见本轮交付摘要；测试不调用真实模型。真实模型任务评测与用户体验验收仍待执行。工具接口、范围和失败行为详见上述实现；本节不记录未在当前工作区重跑的历史通过数量。

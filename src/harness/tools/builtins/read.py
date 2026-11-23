@@ -8,7 +8,7 @@ from src.harness.tools.base import BaseTool, ToolFailure
 
 class ReadTool(BaseTool):
     name = "read"
-    description = "Read a bounded, line-numbered section of a UTF-8 text file in the workspace."
+    description = "Read workspace text."
     parameters = {
         "type": "object",
         "properties": {

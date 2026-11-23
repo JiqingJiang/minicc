@@ -9,7 +9,7 @@ from src.harness.tools.base import BaseTool, ToolFailure
 
 class GlobTool(BaseTool):
     name = "glob"
-    description = "List workspace files matching a glob pattern, such as **/*.py."
+    description = "Find files by glob."
     parameters = {
         "type": "object",
         "properties": {

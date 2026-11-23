@@ -17,7 +17,7 @@ _CHINESE_ACTIONS = {
 
 class ToolSearchTool(BaseTool):
     name = "tool_search"
-    description = "Find a registered tool by describing the action you need."
+    description = "Find a tool."
     parameters = {
         "type": "object",
         "properties": {"query": {"type": "string", "minLength": 1, "maxLength": 400}},

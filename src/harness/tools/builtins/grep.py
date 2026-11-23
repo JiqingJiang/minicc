@@ -10,7 +10,7 @@ from src.harness.tools.base import BaseTool, ToolFailure
 
 class GrepTool(BaseTool):
     name = "grep"
-    description = "Search UTF-8 workspace files for a regular expression, optionally filtered by glob."
+    description = "Search files by regex."
     parameters = {
         "type": "object",
         "properties": {
