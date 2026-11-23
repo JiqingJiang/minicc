@@ -6,7 +6,8 @@ from pathlib import Path
 from src.adapters.models.litellm_model import create_model, create_memory_embedder, load_model_config, model_labels
 from src.client.terminal_chat import run_terminal_chat
 from src.harness.tools.builtins import create_builtin_registry
-from src.harness.context.assembler import ContextAssembler, project_identity
+from src.harness.context.assembler import ContextAssembler, ContextBudget, project_identity
+from src.harness.context.prompt import PromptCatalog
 from src.harness.memory.store import state_root
 from src.harness.memory.manager import MemoryManager
 from src.harness.memory.remember_tool import RememberMemoryTool, SearchMemoryTool
@@ -25,6 +26,9 @@ def main() -> int:
         model_name = os.environ.get("MINICC_MODEL", "").strip() or config.get("default")
         if not isinstance(model_name, str) or not model_name.strip():
             raise ValueError("请设置默认模型或通过 MINICC_MODEL 选择模型。")
+        agent_id = config.get("agent_id", "default")
+        if not isinstance(agent_id, str) or not agent_id.strip():
+            raise ValueError("agent_id 必须是非空字符串。")
         workspace = Path.cwd().resolve()
         project_id = project_identity(workspace)
         memory = MemoryManager(state_root(), project_id, create_memory_embedder(config))
@@ -34,7 +38,13 @@ def main() -> int:
         session = ChatSession(
             create_model(config, model_name),
             registry=tools,
-            context=ContextAssembler(workspace, memory=memory),
+            context=ContextAssembler(
+                workspace,
+                memory=memory,
+                budget=ContextBudget.from_config(config.get("context_budget")),
+                prompt_catalog=PromptCatalog.from_config(config.get("agent_profiles")),
+                agent_id=agent_id,
+            ),
             history_path=state_root() / "projects" / project_id / "session.json",
         )
     except (OSError, RuntimeError, ValueError) as error:

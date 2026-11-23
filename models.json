@@ -1,5 +1,17 @@
 {
-  "default": "deepseek-flash",
+  "default": "glm",
+  "context_budget": {
+    "context_window_tokens": 32768,
+    "output_tokens": 4096,
+    "reserve_tokens": 1024,
+    "compression_threshold": 0.8,
+    "compression_target": 0.55,
+    "min_recent_turns": 2,
+    "summary_max_chars": 6000,
+    "tool_result_max_chars": 4000,
+    "max_skill_count": 5,
+    "max_skill_chars": 8000
+  },
   "models": {
     "bailian": {
       "model": "dashscope/qwen-flash",
@@ -22,7 +34,7 @@
       "extra_body": {"thinking": {"type": "disabled"}}
     },
     "glm": {
-      "model": "bigmodel/glm-5.3",
+      "model": "bigmodel/glm-5.3-flash",
       "provider_label": "智谱 GLM",
       "api_key_env": "GLM_API_KEY",
       "api_base_env": "GLM_BASE_URL",

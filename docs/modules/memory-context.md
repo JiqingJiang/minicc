@@ -7,7 +7,9 @@
 ## 结构与数据位置
 
 - `src/harness/memory/store.py` 提供 JSON 文件存储；所有读改写操作由旁路锁文件上的系统文件锁串行化，写入通过同目录唯一临时文件原子替换，避免并发更新互相覆盖。`manager.py` 负责范围路由、向量生成及旧记录的按需向量补建；`retrieval.py` 使用 BM25、jieba 搜索模式中文分词和余弦语义分数混合排序。默认通过 FastEmbed 在本地 CPU 运行 `BAAI/bge-small-zh-v1.5`，首次使用时下载模型；可在 `models.json` 的 `memory_embeddings` 中指定 `model` 与可选 `cache_dir`，设为 `false` 可关闭向量检索。向量只在本机生成，模型不可用时退回 BM25。全局记忆在 `$XDG_STATE_HOME/minicc/memories.json`，未设置 `XDG_STATE_HOME` 时使用 `~/.local/state/minicc/memories.json`。项目记忆放入相邻的 `projects/<项目身份>/memories.json`。项目身份由 Git 根目录绝对路径的 SHA-256 得出；非 Git 工作区使用其规范化绝对路径，因此同名目录不会共享数据。
-- `src/harness/context/assembler.py` 在每次模型请求前装配当前消息、可用历史、`~/minicc/MINICC.md` 全局指令、当前工作区根目录的 `MINICC.md`、当前任务状态、相关记忆和工具预算信息。先加载全局文件，再加载工作区文件；MiniCC 不自动读取 `AGENTS.md` 或嵌套目录中的 `MINICC.md`。单文件最多 12,000 字符，总计最多 24,000 字符。指令超限会在来源记录中标出。自动召回查询由当前用户请求、任务目标和最近确认的决定构成；出现历史意图时才检索已取代记录。
+- `src/harness/context/assembler.py` 在每次模型请求前装配当前消息、可用历史、`~/.minicc/MINICC.md` 全局指令、当前工作区根目录的 `MINICC.md`、当前任务状态、相关记忆、已选 Skill 和工具预算信息。先加载全局文件，再加载工作区文件；MiniCC 不自动读取 `AGENTS.md` 或嵌套目录中的 `MINICC.md`。单文件最多 12,000 字符，总计最多 24,000 字符。指令超限会在来源记录中标出。自动召回查询由当前用户请求、任务目标和最近确认的决定构成；出现历史意图时才检索已取代记录。
+- `src/harness/context/prompt.py` 定义 `AgentProfile`、`SystemPromptProvider` 与 `PromptCatalog`。默认 Profile 提供 MiniCC System Prompt；可在模型配置的 `agent_profiles` 对象声明不同 `agent_id` 的名称、目标和 System Prompt，并由顶层 `agent_id` 选择当前主 Agent，或向 Context 装配器注入自定义目录。未知 Profile ID 会报错，不静默回退成默认角色。SubAgent/Team 尚未实现；未来每个 Agent 可使用自己的 `agent_id` 和 Context 装配器。
+- `src/harness/context/skills.py` 定义 `Skill` 和 `SkillProvider.select(query, agent_id)` 接口。当前没有 Skill 发现、读取或存储实现；运行时可以注入 Provider 按请求和 Agent 身份选出 Skill，Context 将选中内容加入模型输入并追踪来源。
 - `src/runtime/session/chat_session.py` 保存会话原始消息，包括工具调用及结果。项目当前会话位于 `projects/<项目身份>/session.json`；再次启动同一项目会自动续接。输入 `/new` 会将旧原文归档到 `sessions/` 并开始新聊天。Memory、任务状态和原始历史使用独立文件。
 - `src/runtime/task/state.py` 保存当前项目任务的目标、已确认要求/决定、进度和未解决事项，位于 `projects/<项目身份>/task.json`。状态由用户通过终端命令维护。
 - 单次 Context 来源、估算输入 Token、模型适配器可提供的实际输入/输出 Token、裁剪数量和摘要标记追加到 `context-traces.jsonl`。模型请求失败或达到执行时间上限时也会尝试记录本次 trace。用 `/context` 查看当前项目最近记录。
@@ -54,11 +56,13 @@
 
 `/new` 也会把当前任务状态归档到 `tasks/`，新聊天从空任务状态开始。归档文件保留，但终端目前没有选择和恢复旧归档的命令。
 
-Context 预算默认为 24,000 个估算 Token；估算对中日韩字符按约 1.5 字符折算，对其他字符按约 4 字符折算，并将实际可用工具 schema 纳入估算。该值只是请求前估算，实际输入/输出 Token 以模型适配器返回值为准。超限时从最早完成的对话轮次开始移除，并在本次请求加入最多 8 条有界片段摘要。大型工具结果在请求视图中保留首尾片段，完整原文留在会话记录中。历史摘要标记为系统摘要并关联被覆盖的会话轮次 ID。当前用户请求、系统提示、任务状态和指令不会因历史裁剪而删除。当前版本每个项目只有一个可直接续接的聊天；旧聊天和任务状态会归档，但还没有选择和恢复旧归档的命令，也没有自动从工具结果更新任务状态。
+Context 预算通过 `models.json` 顶层 `context_budget` 配置，字段包括模型窗口、输出预留、额外安全余量、触发压缩比例、压缩目标、保留的最近轮次数、摘要字符上限、工具结果上限以及 Skill 数量/总字符上限。默认模型窗口为 32,768 Token，其中 4,096 留给输出、1,024 为安全余量；输入占可用预算 80% 时开始压缩，目标为可用预算的 55%。Token 估算对中日韩字符按约 1 Token、其他字符按约 3 字符折算，并将工具 schema 纳入估算。该值只是请求前估算，实际输入/输出 Token 以模型适配器返回值为准。压缩以用户轮次为单位移除最早的完整轮次并生成有界摘录摘要，保留最近轮次；工具调用及其结果作为同一轮次整体保留。达到压缩阈值后，超长工具结果会按配置字符数截断，完整原文仍保存在会话记录中。摘要以非原始、非指令的助理消息注入，并在 trace 中关联覆盖的轮次 ID。当前用户请求和系统指令不因历史裁剪而删除；若当前请求本身超出输入预算，trace 会报告剩余超限量，不会丢弃当前请求。当前版本每个项目只有一个可直接续接的聊天；旧聊天和任务状态会归档，但还没有选择和恢复旧归档的命令，也没有自动从工具结果更新任务状态。
 
 ## 验证与限制
 
 自动化回归入口为 `.venv/bin/python -B -m unittest discover -s tests -v`；`tests/test_memory.py` 覆盖来源伪造防护、可信来源取代和并发写入，其他测试覆盖工具循环与终端审批。裸系统 `python3` 若未安装 `requirements.txt` 中的依赖，会在测试导入时失败。验证不覆盖在线模型质量。用户验收前仍应验证全局与不同项目隔离、记忆新增/编辑/冲突解决/删除及敏感值拒绝、上下文召回与预算裁剪、重启后的历史恢复和 Context trace。
+
+2026-11-23 在本工作区执行完整自动化回归，**41 项通过**，包含隐藏目录指令发现、Agent Profile、Skill Provider、按完整轮次压缩、工具结果裁剪及调用 ID 保留。`models.json` JSON 解析和 `src`/`tests` 字节码编译检查通过。LiteLLM 在测试启动时尝试联网刷新模型价格表失败，已回退本地数据；适配器还输出 Pydantic `ReadOnly` 提示。未执行真实模型任务、SubAgent/Team 集成或 Skill 文件发现/加载验收。
 
 ## 错误处理
 
