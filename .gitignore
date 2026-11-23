@@ -10,3 +10,10 @@ __pycache__/
 .venv/
 venv/
 env/
+
+# Local desktop metadata and personal Codex skill copies
+.DS_Store
+.codex/skills/
+
+# Learning notes
+docs/learn/
