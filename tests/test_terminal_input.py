@@ -176,3 +176,54 @@ class TerminalInputTests(TestCase):
             _print_tool_result(call, res, color=True, display=display)
         expanded_out = buf_expanded.getvalue()
         self.assertIn("line 2", expanded_out)
+
+    def test_ctrl_o_in_macos_pty_toggles_tool_expand_and_prints_latest_tool_detail(self):
+        from src.client.terminal_chat import ToolDisplayController
+        from src.harness.tools.base import ToolCall, ToolResult
+
+        pid, terminal = os.forkpty()
+        if pid == 0:
+            try:
+                import fcntl, struct, termios
+                fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 140, 0, 0))
+                mode = PermissionModeController()
+                display = ToolDisplayController(expanded=False)
+                call = ToolCall("c1", "web_search", '{"query":"minicc"}')
+                display.record_start(call, {"query": "minicc"})
+                display.record_result(call, ToolResult("c1", "Search hit line 1\nSearch hit line 2"))
+                line = TerminalInput(mode, tool_display=display).read()
+                print(f"\nCTRL_O_EXPANDED={display.expanded}; LINE={line}", flush=True)
+            finally:
+                os._exit(0)
+
+        try:
+            output = bytearray()
+            deadline = time.monotonic() + 5
+            while "›".encode("utf-8") not in output:
+                remaining = deadline - time.monotonic()
+                self.assertGreater(remaining, 0, "terminal prompt did not appear")
+                readable, _, _ = select.select([terminal], [], [], remaining)
+                if readable:
+                    output.extend(os.read(terminal, 4096))
+
+            # Send Ctrl+O (\x0f) followed by 'ok\r'
+            os.write(terminal, b"\x0fok\r")
+            while b"CTRL_O_EXPANDED=" not in output:
+                remaining = deadline - time.monotonic()
+                self.assertGreater(remaining, 0, "terminal input did not finish")
+                readable, _, _ = select.select([terminal], [], [], remaining)
+                if readable:
+                    try:
+                        output.extend(os.read(terminal, 4096))
+                    except OSError:
+                        break
+
+            result = output.decode("utf-8", errors="replace")
+            self.assertIn("CTRL_O_EXPANDED=True; LINE=ok", result)
+            self.assertIn("Search hit line 2", result)
+        finally:
+            try:
+                os.close(terminal)
+            except OSError:
+                pass
+            os.waitpid(pid, 0)

@@ -13,6 +13,8 @@
 | `read` | 有界读取工作区 UTF-8 文本文件与行范围 | 全部模式 | 否 |
 | `glob` | 按工作区相对模式列出匹配文件（超上限时明确提示） | 全部模式 | 否 |
 | `grep` | 按带超时保护的正则搜索工作区文本 | 全部模式 | 否 |
+| `web_search` | 检索互联网公开网页信息（返回标题、URL、摘要列表，支持免配置搜索引擎与可选 Tavily/Brave API） | 全部模式（含 `--chat-only`） | 否 |
+| `web_fetch` | 抓取公开 `http`/`https` 网页并提取可读正文、Markdown 或 JSON（内置 SSRF 私网/环回/元数据地址拦截与分段读取） | 全部模式（含 `--chat-only`） | 否 |
 | `tool_search` | 按关键词检索当前注册且有效的工具 | 全部模式 | 否 |
 | `write` | 创建（含自动创建工作区内相对父目录）或完整更新文件，原子交换防并发冲突 | `normal` / `goal` | Default 每次；Auto 自动 |
 | `edit` | 替换文件内唯一匹配文本，生成 unified diff 预览并原子交换 | `normal` / `goal` | Default 每次；Auto 自动 |

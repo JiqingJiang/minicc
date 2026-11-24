@@ -13,7 +13,7 @@
 | [`src/harness/tools/executor.py`](../../src/harness/tools/executor.py) | Schema Draft 2020-12 校验、严格 JSON 解析、Schema 字节预算过滤、审批暂停与恢复、结果截断。 |
 | [`src/harness/permission/workspace.py`](../../src/harness/permission/workspace.py) | 目录 fd + `O_NOFOLLOW` 路径解析、敏感路径拦截、安全递归创建子目录、平台原子目录项交换（`RENAME_SWAP` / `RENAME_EXCHANGE`）。 |
 | [`src/adapters/sandbox/executor.py`](../../src/adapters/sandbox/executor.py) | `SandboxPolicy` 与 `SandboxExecutor`：macOS `sandbox-exec` Seatbelt Profile 生成与隔离执行、提权标记与进程组超时清理。 |
-| [`src/harness/tools/builtins/`](../../src/harness/tools/builtins/) | `read`、`write`、`edit`、`bash`、`glob`、`grep`、`tool_search` 内置工具实现。 |
+| [`src/harness/tools/builtins/`](../../src/harness/tools/builtins/) | `read`、`write`、`edit`、`bash`、`glob`、`grep`、`tool_search`、`web_search`、`web_fetch` 内置工具实现。 |
 | [`src/adapters/mcp/client.py`](../../src/adapters/mcp/client.py) | 基于 `subprocess` + JSON-RPC 2.0 over `stdio` 的轻量级 MCP 客户端与 `McpTool(BaseTool)` 适配器。 |
 
 ## 核心设计逻辑
@@ -44,3 +44,13 @@
 
 - `ToolRegistry` 支持绑定 `state_path`（默认 `~/.minicc/tools.json`），持久化保存用户停用的工具集合。`/tools` 命令以 `1..N` 编号列出所有已注册工具，用户输入编号即可一键切换启用/停用状态；停用后的工具不会从 `registry.all()` 返回。
 - `McpManager` 支持绑定 `state_path`（默认 `~/.minicc/mcp.json`），持久化保存每个 MCP Server 的启用/停用状态，并动态同步到 `ToolRegistry`。`/mcp` 命令以 `1..N` 编号展示各 MCP Server 及其工具列表，用户输入编号即可一键开启或关闭对应 MCP Server。
+
+### 5. 联网搜索与网页读取（`src/harness/tools/builtins/web.py`）
+
+- **`web_search`（`WebSearchTool`）**：
+  - `read_only=True, requires_approval=False`，支持在 `normal`、`plan`、`goal`、只读子 Agent（`explorer`/`planner`）以及 `--chat-only` 模式下使用。
+  - 采用“可选 API Key 优先 + 零配置 HTML 搜索兜底”双轨机制：若环境变量配置了 `TAVILY_API_KEY` 或 `BRAVE_SEARCH_API_KEY`，优先请求对应 JSON API；否则自动依次通过 DuckDuckGo HTML 与 Bing HTML 搜索并解析标题、真实跳转 URL 与摘要。
+- **`web_fetch`（`WebFetchTool`）**：
+  - `read_only=True, requires_approval=False`，抓取公开 `http://` 或 `https://` 页面并转换为可读文本。
+  - **SSRF 安全边界**：`validate_public_url()` 与 `_SafeRedirectHandler` 在发起请求前及每次 HTTP 重定向（上限 5 次）时校验目标 URL，拒绝非 HTTP(S) 协议、URL 内嵌凭证、本地主机名（`localhost`、`*.local`、`*.internal`）以及解析到环回、私网、链路本地、CGNAT（`100.64.0.0/10`）和云元数据（`169.254.169.254`）的 IPv4/IPv6 地址。
+  - **内容清洗与有界分页**：单次流式下载上限 2 MiB，拒绝二进制 MIME（`UNSUPPORTED_CONTENT_TYPE`）；HTML 页面通过 `_ReadableHTMLParser` 剥离 `<script>`/`<style>`/`<svg>` 等噪音并保留标题、层级标题、列表、代码块和外链 URL，支持通过 `start_char` 与 `max_chars`（默认 6,000，上限 7,500）分段读取。

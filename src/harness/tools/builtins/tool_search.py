@@ -12,6 +12,8 @@ _CHINESE_ACTIONS = {
     "修改": "edit", "编辑": "edit", "搜索": "grep", "查找内容": "grep", "列出": "glob",
     "文件名": "glob", "命令": "bash", "运行": "bash", "执行": "bash",
     "计划": "update_plan", "提问": "ask_user", "子任务": "delegate_subagent",
+    "上网": "web_search", "联网": "web_search", "网页搜索": "web_search", "查资料": "web_search",
+    "抓取": "web_fetch", "网页": "web_fetch", "网址": "web_fetch", "链接": "web_fetch",
 }
 
 

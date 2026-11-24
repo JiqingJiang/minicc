@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
@@ -11,6 +12,7 @@ import shutil
 import sys
 
 from prompt_toolkit import PromptSession
+from prompt_toolkit.application import run_in_terminal
 from prompt_toolkit.formatted_text import FormattedText
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.keys import Keys
@@ -98,6 +100,39 @@ class ToolDisplayController:
         return entry
 
 
+@contextmanager
+def _macos_passthrough_ctrl_keys():
+    """Disable macOS BSD VDISCARD (^O) and VDSUSP (^Y) so Ctrl+O reaches prompt_toolkit."""
+    if not sys.stdin.isatty():
+        yield
+        return
+    try:
+        import termios
+
+        fd = sys.stdin.fileno()
+        original = termios.tcgetattr(fd)
+        patched = termios.tcgetattr(fd)
+        cc = list(patched[6])
+        vdiscard = getattr(termios, "VDISCARD", None)
+        vdsusp = getattr(termios, "VDSUSP", None)
+        if vdiscard is not None and vdiscard < len(cc):
+            cc[vdiscard] = 0
+        if vdsusp is not None and vdsusp < len(cc):
+            cc[vdsusp] = 0
+        patched[6] = cc
+        termios.tcsetattr(fd, termios.TCSANOW, patched)
+    except Exception:
+        yield
+        return
+    try:
+        yield
+    finally:
+        try:
+            termios.tcsetattr(fd, termios.TCSANOW, original)
+        except Exception:
+            pass
+
+
 def _format_model_display(active_model: str, models: dict[str, str] | None = None) -> str:
     """Resolve full model name (e.g. '智谱 GLM / glm-5.3-flash [glm]') instead of just provider alias."""
     if not active_model:
@@ -142,6 +177,16 @@ class TerminalInput:
             if self.tool_display is not None:
                 is_exp = self.tool_display.toggle()
                 self.transient_notice = f"工具详情已{'展开' if is_exp else '折叠'}"
+                if is_exp and self.tool_display.entries:
+                    last_entry = self.tool_display.entries[-1]
+
+                    def _render_latest() -> None:
+                        color_on = sys.stdout.isatty() and "NO_COLOR" not in os.environ
+                        _print_tool_start(last_entry.call, last_entry.arguments, color=color_on, display=None)
+                        if last_entry.result is not None:
+                            _print_tool_result(last_entry.call, last_entry.result, color=color_on, display=None)
+
+                    run_in_terminal(_render_latest)
             if self.on_toggle_expand is not None:
                 self.on_toggle_expand()
             event.app.invalidate()
@@ -203,18 +248,19 @@ class TerminalInput:
         return FormattedText(fragments)
 
     def read(self, prompt: str | None = None) -> str:
-        if prompt is None:
-            line = self._session.prompt()
-            self.transient_notice = ""
-            return line
-        return self._session.prompt(
-            message=FormattedText(
-                [
-                    ("class:prompt.box", "│ "),
-                    ("class:title", f"{prompt} › "),
-                ]
+        with _macos_passthrough_ctrl_keys():
+            if prompt is None:
+                line = self._session.prompt()
+                self.transient_notice = ""
+                return line
+            return self._session.prompt(
+                message=FormattedText(
+                    [
+                        ("class:prompt.box", "│ "),
+                        ("class:title", f"{prompt} › "),
+                    ]
+                )
             )
-        )
 
 
 def _printable(text: str) -> str:
@@ -277,7 +323,7 @@ def _show_welcome(model_display: str, mode: str = "normal") -> None:
 def _summarize_tool_args(arguments: dict) -> str:
     if not arguments:
         return ""
-    for key in ("path", "command", "query", "pattern", "skill_id", "name", "question", "goal", "task"):
+    for key in ("path", "url", "command", "query", "pattern", "skill_id", "name", "question", "goal", "task"):
         if key in arguments and isinstance(arguments[key], str):
             val = " ".join(arguments[key].split())
             if len(val) > 48:
@@ -306,10 +352,11 @@ def _print_tool_start(
     *,
     color: bool,
     display: ToolDisplayController | None = None,
+    record: bool = True,
 ) -> None:
-    if display is not None:
+    if display is not None and record:
         display.record_start(call, arguments)
-    expanded = display.expanded if display is not None else False
+    expanded = display.expanded if display is not None else True
     if color and not expanded:
         # In collapsed mode we wait for _print_tool_result to print a single compact summary line
         return
@@ -335,9 +382,13 @@ def _print_tool_result(
     *,
     color: bool,
     display: ToolDisplayController | None = None,
+    record: bool = True,
 ) -> None:
-    entry = display.record_result(call, result) if display is not None else ToolLogEntry(call, {}, result)
-    expanded = display.expanded if display is not None else False
+    if display is not None and record:
+        entry = display.record_result(call, result)
+    else:
+        entry = ToolLogEntry(call, {}, result)
+    expanded = display.expanded if display is not None else True
     content = _printable(result.content)
 
     if color and not expanded:

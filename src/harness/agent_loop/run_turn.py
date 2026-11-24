@@ -77,10 +77,10 @@ TurnPause = ApprovalRequest | ClarificationRequest | RetryRequest
 TurnDriver = Generator[TurnPause, Any, str]
 
 _TOOL_APPROVAL_POLICY = (
-    "启用工作区工具时，MiniCC 提供 read、write、edit、tool_search、bash、glob、grep；"
+    "启用工作区工具时，MiniCC 提供 read、write、edit、tool_search、bash、glob、grep、web_search、web_fetch；"
     "还可通过 update_plan 管理任务计划、ask_user 向用户提问、delegate_subagent 委派子 Agent，"
     "以及通过 search_skills、install_skill 和 load_skill 管理本机 Skill。"
-    "创建或覆盖文件调用 write，精确修改现有文件调用 edit；命令操作调用 bash。"
+    "创建或覆盖文件调用 write，精确修改现有文件调用 edit；命令操作调用 bash；联网检索信息调用 web_search，读取公开网页或接口内容调用 web_fetch。"
     "Default 权限模式下，write、edit、install_skill 和每一条 bash 命令会触发宿主审批；用户可显式切换本会话 Auto 模式，"
     "让宿主自动批准沙箱内操作，但 allow_unsandboxed=true 的提权请求始终需要用户明确审批。"
     "不要只用文字声称正在等待批准；只有宿主实际暂停并返回审批请求后，才可以说操作正在等待用户决定。"

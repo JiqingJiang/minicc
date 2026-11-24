@@ -251,7 +251,10 @@ class ToolTurnTests(TestCase):
     def test_executor_keeps_the_core_tools_within_the_schema_budget(self):
         registry = create_builtin_registry(self.root)
         visible = ToolExecutor().offered_tools(registry.all())
-        self.assertEqual([tool.name for tool in registry.all()], ["read", "write", "edit", "tool_search", "bash", "glob", "grep"])
+        self.assertEqual(
+            [tool.name for tool in registry.all()],
+            ["read", "write", "edit", "tool_search", "bash", "glob", "grep", "web_search", "web_fetch"],
+        )
         self.assertEqual(visible, registry.all())
         self.assertLessEqual(schema_size(visible), 3_600)
 

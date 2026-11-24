@@ -9,6 +9,7 @@ from src.harness.tools.builtins.glob import GlobTool
 from src.harness.tools.builtins.grep import GrepTool
 from src.harness.tools.builtins.read import ReadTool
 from src.harness.tools.builtins.tool_search import ToolSearchTool
+from src.harness.tools.builtins.web import WebFetchTool, WebSearchTool
 from src.harness.tools.builtins.write import WriteTool
 from src.harness.tools.registry import ToolRegistry
 
@@ -19,6 +20,12 @@ def create_builtin_registry(root: Path, *, use_sandbox: bool = True) -> ToolRegi
     for tool in (ReadTool(workspace), WriteTool(workspace), EditTool(workspace)):
         registry.register(tool)
     registry.register(ToolSearchTool(registry))
-    for tool in (BashTool(workspace.root, use_sandbox=use_sandbox), GlobTool(workspace), GrepTool(workspace)):
+    for tool in (
+        BashTool(workspace.root, use_sandbox=use_sandbox),
+        GlobTool(workspace),
+        GrepTool(workspace),
+        WebSearchTool(),
+        WebFetchTool(),
+    ):
         registry.register(tool)
     return registry

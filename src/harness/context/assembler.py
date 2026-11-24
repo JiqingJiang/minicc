@@ -520,8 +520,8 @@ class ContextAssembler:
 def _mode_guidance(mode: str) -> str:
     if mode == "plan":
         return (
-            "当前运行模式：Plan（只读规划模式）。你只能使用只读工具（read、glob、grep、memory_search、load_skill、只读子 Agent）"
-            "探索代码库，遇到关键歧义时调用 ask_user 询问用户，并在方案清晰后调用 update_plan(submit_for_approval=true) 提交结构化计划等待用户批准。"
+            "当前运行模式：Plan（只读规划模式）。你只能使用只读工具（read、glob、grep、web_search、web_fetch、memory_search、load_skill、只读子 Agent）"
+            "探索代码库与外部资料，遇到关键歧义时调用 ask_user 询问用户，并在方案清晰后调用 update_plan(submit_for_approval=true) 提交结构化计划等待用户批准。"
         )
     if mode == "goal":
         return (

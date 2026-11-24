@@ -22,8 +22,8 @@ _READ_ONLY_ROLES = {"explorer", "planner"}
 
 _ROLE_PROMPTS = {
     "explorer": (
-        "你是 MiniCC 的 Explorer 子 Agent。你的职责是使用只读工具（read、glob、grep、memory_search、load_skill）"
-        "快速定位代码实现、查找引用并向父 Agent 返回简洁、带文件路径与行号证据的调查结论。不要猜测未读取的文件内容。"
+        "你是 MiniCC 的 Explorer 子 Agent。你的职责是使用只读工具（read、glob、grep、web_search、web_fetch、memory_search、load_skill）"
+        "快速定位代码实现、查找引用或检索网页资料，并向父 Agent 返回简洁、带文件路径/行号或 URL 证据的调查结论。不要猜测未读取的内容。"
     ),
     "planner": (
         "你是 MiniCC 的 Planner 子 Agent。你的职责是使用只读工具分析现有代码结构与约束，"

@@ -29,6 +29,7 @@ from src.harness.skills import (
     SkillsCatalogClient,
 )
 from src.harness.tools.builtins import create_builtin_registry
+from src.harness.tools.builtins.web import WebFetchTool, WebSearchTool
 from src.harness.tools.registry import ToolRegistry
 from src.runtime.hitl.contracts import AskUserTool, UpdatePlanTool
 from src.runtime.session.chat_session import ChatSession
@@ -77,7 +78,7 @@ def main() -> int:
             feature_enabled=skills_enabled,
         )
         catalog = SkillsCatalogClient()
-        tools = ToolRegistry() if args.chat_only else create_builtin_registry(workspace)
+        tools = ToolRegistry((WebSearchTool(), WebFetchTool())) if args.chat_only else create_builtin_registry(workspace)
         tools.bind_state_path(state_root() / "tools.json")
         tools.register(RememberMemoryTool(memory))
         tools.register(SearchMemoryTool(memory))
