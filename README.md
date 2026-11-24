@@ -2,7 +2,7 @@
 
 <p align="left">
   <strong>通过 AI Coding 从零构建的通用终端 Agent Harness</strong><br>
-  由 <a href="https://github.com/JiqingJiang/">@JiqingJiang</a> 独立设计与工程化实现 · 聚焦真实编码任务交付质量、安全边界与全链路 Token 效率
+  聚焦真实编码任务交付质量、安全边界与全链路 Token 效率
 </p>
 
 ---
@@ -156,9 +156,3 @@ python3 -m unittest discover -s tests
 - **项目协作入口与持续规范**：[AGENTS.md](AGENTS.md) 与 [分类项目规则](docs/rules/README.md)
 - **研发阶段、测试分层与验收标准**：[开发流程规范](docs/workflow/development-process-spec.md) 与 [Codex 协作设置](docs/workflow/codex-setup.md)
 - **需求契约、实现事实与关键取舍分离**：[模块 Spec (`docs/specs/`)](docs/specs/)、[模块实现说明 (`docs/modules/`)](docs/modules/) 与 [项目决策记录 (`docs/decisions/`)](docs/decisions/README.md)
-
----
-
-## 作者
-
-- **Jiqing Jiang** — [https://github.com/JiqingJiang/](https://github.com/JiqingJiang/)
