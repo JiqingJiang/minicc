@@ -5,14 +5,23 @@ from unittest.mock import patch
 
 from src.harness.context.assembler import ContextAssembler, ContextBudget
 from src.harness.context.prompt import AgentProfile, PromptCatalog
-from src.harness.context.skills import Skill, SkillProvider
 from src.harness.memory.manager import MemoryManager
+from src.harness.skills import Skill, SkillProvider, SkillRegistry
 from src.harness.tools.base import ToolCall
 
 
 class StaticSkills(SkillProvider):
-    def select(self, query: str, *, agent_id: str) -> tuple[Skill, ...]:
-        return (Skill("writing", "Writing conventions", "Use concise Chinese.", "test-skill"),)
+    def select(self, query: str, *, agent_id: str, limit: int = 5) -> tuple[Skill, ...]:
+        return (
+            Skill(
+                "writing",
+                "Writing conventions",
+                None,
+                "test-skill",
+                description="Use concise Chinese.",
+                tags=("writing",),
+            ),
+        )
 
 
 class ContextAssemblerTests(TestCase):
@@ -22,6 +31,11 @@ class ContextAssemblerTests(TestCase):
         self.root = Path(self.temp.name) / "workspace"
         self.root.mkdir()
         self.state = Path(self.temp.name) / "state"
+        self.home = Path(self.temp.name) / "home"
+        self.home.mkdir()
+        home_patch = patch.object(Path, "home", return_value=self.home)
+        home_patch.start()
+        self.addCleanup(home_patch.stop)
         self.memory = MemoryManager(self.state, "project")
 
     def assembler(self, **kwargs):
@@ -63,19 +77,45 @@ class ContextAssemblerTests(TestCase):
         with self.assertRaisesRegex(ValueError, "not registered"):
             catalog.get("missing")
 
-    def test_skill_provider_injects_selected_skill_and_records_its_source(self):
+    def test_skill_provider_injects_only_metadata_and_records_candidate_source(self):
         catalog = PromptCatalog((
             AgentProfile("default", "MiniCC", "General assistant", "Base prompt."),
             AgentProfile("writer", "Writer", "Write documents", "Writing prompt."),
         ))
-        result = self.assembler(skill_provider=StaticSkills(), prompt_catalog=catalog, agent_id="writer",
-                                budget=ContextBudget(max_skill_chars=10)).assemble(
-            [{"role": "user", "content": "Write a report"}]
-        )
+        result = self.assembler(
+            skill_provider=StaticSkills(),
+            prompt_catalog=catalog,
+            agent_id="writer",
+            budget=ContextBudget(max_skill_chars=10),
+        ).assemble([{"role": "user", "content": "Write a report"}])
         content = "\n".join(str(message.get("content", "")) for message in result.messages)
-        self.assertIn("Use concis", content)
+        self.assertIn("Writing conventions", content)
+        self.assertNotIn("Use concise Chinese.", content)
         skill_source = next(source for source in result.trace.sources if source.get("kind") == "skill")
         self.assertTrue(skill_source["items"][0]["truncated"])
+
+    def test_managed_skill_metadata_is_selected_without_loading_its_body(self):
+        manifest = self.state / "skills/release-notes/SKILL.md"
+        manifest.parent.mkdir(parents=True)
+        manifest.write_text(
+            "---\nname: release-notes\ndescription: Write release notes from code changes.\n---\n"
+            "Summarize changes for a release.\n",
+            encoding="utf-8",
+        )
+
+        result = self.assembler(
+            skill_provider=SkillRegistry(
+                self.root,
+                skills_root=self.state / "skills",
+                state_path=self.state / "skills.json",
+            )
+        ).assemble([{"role": "user", "content": "Write release notes"}])
+
+        context = "\n".join(str(message.get("content", "")) for message in result.messages)
+        self.assertIn("Write release notes from code changes", context)
+        self.assertNotIn("Summarize changes for a release", context)
+        skill_source = next(source for source in result.trace.sources if source.get("kind") == "skill")
+        self.assertIn("release-notes", skill_source["items"][0]["id"])
 
     def test_context_budget_loads_explicit_settings_and_rejects_unknown_fields(self):
         budget = ContextBudget.from_config({"context_window_tokens": 64000, "output_tokens": 2000})
@@ -84,9 +124,15 @@ class ContextAssemblerTests(TestCase):
             ContextBudget.from_config({"typo": 1})
 
     def test_compression_drops_complete_old_turns_and_keeps_recent_tool_pair(self):
-        budget = ContextBudget(context_window_tokens=900, output_tokens=100, reserve_tokens=100,
-                               compression_threshold=0.65, compression_target=0.45,
-                               min_recent_turns=1, summary_max_chars=500)
+        budget = ContextBudget(
+            context_window_tokens=900,
+            output_tokens=100,
+            reserve_tokens=100,
+            compression_threshold=0.65,
+            compression_target=0.45,
+            min_recent_turns=1,
+            summary_max_chars=500,
+        )
         messages = [
             {"role": "user", "content": "old " + "x" * 900, "_source_turn_id": "old"},
             {"role": "assistant", "content": "old answer", "_source_turn_id": "old"},
@@ -105,9 +151,14 @@ class ContextAssemblerTests(TestCase):
         self.assertLessEqual(result.trace.estimated_tokens, budget.available_input_tokens)
 
     def test_compression_trims_oversized_tool_output_without_losing_call_id(self):
-        budget = ContextBudget(context_window_tokens=1500, output_tokens=200, reserve_tokens=100,
-                               compression_threshold=0.5, compression_target=0.4,
-                               tool_result_max_chars=256)
+        budget = ContextBudget(
+            context_window_tokens=1500,
+            output_tokens=200,
+            reserve_tokens=100,
+            compression_threshold=0.5,
+            compression_target=0.4,
+            tool_result_max_chars=256,
+        )
         messages = [
             {"role": "user", "content": "Inspect this", "_source_turn_id": "current"},
             {"role": "assistant", "content": None, "tool_calls": (ToolCall("call-1", "read", "{}"),)},

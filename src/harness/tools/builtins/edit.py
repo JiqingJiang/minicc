@@ -10,7 +10,9 @@ from src.harness.tools.base import ApprovalAction, BaseTool, ToolFailure
 
 class EditTool(BaseTool):
     name = "edit"
-    description = "Edit exact text after approval."
+    description = "Replace one exact text span in a workspace file. Default permission mode requires approval."
+    requires_approval = True
+    read_only = False
     parameters = {
         "type": "object",
         "properties": {

@@ -9,6 +9,7 @@ from src.harness.tools.base import BaseTool, ToolFailure
 class ReadTool(BaseTool):
     name = "read"
     description = "Read workspace text."
+    read_only = True
     parameters = {
         "type": "object",
         "properties": {
@@ -35,7 +36,7 @@ class ReadTool(BaseTool):
         lines = snapshot.text.splitlines()
         if start > max(len(lines), 1):
             raise ToolFailure("INVALID_ARGUMENTS", "start_line 超出文件范围。")
-        selected = lines[start - 1:start - 1 + count]
+        selected = lines[start - 1 : start - 1 + count]
         output: list[str] = []
         used = 0
         for line_no, line in enumerate(selected, start=start):
@@ -49,5 +50,4 @@ class ReadTool(BaseTool):
         header = f"{path} 是空文件。" if not lines else f"{path} 第 {start}-{end} 行"
         if len(output) < len(selected) or start - 1 + len(selected) < len(lines):
             header += f"（可从第 {start + len(output)} 行继续）"
-        text = header + ("\n" + "\n".join(output) if output else "")
-        return text
+        return header + ("\n" + "\n".join(output) if output else "")

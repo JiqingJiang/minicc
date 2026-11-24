@@ -1,7 +1,16 @@
+"""LiteLLM model adapter and lazy on-device FastEmbed factory."""
+
+from __future__ import annotations
+
+from functools import lru_cache
 import json
 import os
-from functools import lru_cache
 from pathlib import Path
+import warnings
+
+# Prevent LiteLLM from blocking startup on remote price-map network requests
+os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+warnings.filterwarnings("ignore", message=".*TypedDict class.*ReadOnly.*", category=UserWarning)
 
 from src.harness.agent_loop.run_turn import Complete, Message, ModelReply, ModelRequestError, RequestUsage
 from src.harness.tools.base import BaseTool, ToolCall, schema_size, tool_definitions
@@ -154,13 +163,16 @@ def create_memory_embedder(config: dict):
         raise ValueError("memory_embeddings.model 必须是非空字符串。")
     if cache_dir is not None and (not isinstance(cache_dir, str) or not cache_dir.strip()):
         raise ValueError("memory_embeddings.cache_dir 必须是非空路径。")
+
     class LocalMemoryEmbedder:
         @lru_cache(maxsize=1)
         def _model(self):
             try:
                 from fastembed import TextEmbedding
             except ModuleNotFoundError as error:
-                raise RuntimeError("本地 Memory 向量检索需要安装 FastEmbed；请重新安装 requirements.txt 中的依赖。") from error
+                raise RuntimeError(
+                    "本地 Memory 向量检索需要安装 FastEmbed；请重新安装 requirements.txt 中的依赖。"
+                ) from error
             return TextEmbedding(model_name=model_name.strip(), cache_dir=cache_dir)
 
         def __call__(self, text: str) -> tuple[str, list[float]] | None:

@@ -1,41 +1,50 @@
-"""Approval-gated Bash command execution."""
+"""Bash command execution with macOS Seatbelt sandbox-exec and elevated unsandboxed approval."""
 
+from __future__ import annotations
+
+from collections.abc import Callable
+from dataclasses import dataclass
 import os
+from pathlib import Path
 import selectors
 import shutil
 import signal
 import subprocess
-from collections.abc import Callable
-from dataclasses import dataclass
-from pathlib import Path
 from time import monotonic
 
+from src.adapters.sandbox.executor import SandboxPolicy, sandbox_available, wrap_sandbox_command
 from src.harness.tools.base import ApprovalAction, BaseTool, ToolFailure, ToolTimeout
-
 
 _MAX_COMMAND = 7_000
 _MAX_OUTPUT = 16 * 1024
-_COMMAND_TIMEOUT = 60
+_COMMAND_TIMEOUT = 300
 
 
 class BashTool(BaseTool):
     name = "bash"
     description = (
-        "Run a Bash command with user approval. It starts in the workspace but runs as the current user "
-        "and can access files outside the workspace and use the network."
+        "Run a Bash command in the workspace. On macOS, commands run inside a Seatbelt sandbox restricting "
+        "file writes to the workspace, ~/.minicc, and /tmp. Set allow_unsandboxed=true only when outside "
+        "write or network access is required (always requires explicit user approval)."
     )
+    requires_approval = True
+    read_only = False
     parameters = {
         "type": "object",
-        "properties": {"command": {"type": "string", "minLength": 1, "maxLength": _MAX_COMMAND}},
+        "properties": {
+            "command": {"type": "string", "minLength": 1, "maxLength": _MAX_COMMAND},
+            "allow_unsandboxed": {"type": "boolean", "default": False},
+        },
         "required": ["command"],
         "additionalProperties": False,
     }
-    requires_approval = True
 
-    def __init__(self, cwd: Path) -> None:
+    def __init__(self, cwd: Path, *, allow_network: bool = False, use_sandbox: bool = True) -> None:
         self.cwd = Path(cwd).resolve(strict=True)
         if not self.cwd.is_dir():
             raise ValueError("Bash 工作目录必须是目录。")
+        self.policy = SandboxPolicy(workspace=self.cwd, allow_network=allow_network)
+        self.use_sandbox = use_sandbox
 
     def execute(self, arguments: dict, checkpoint: Callable[[], None]) -> str:
         del arguments, checkpoint
@@ -43,15 +52,28 @@ class BashTool(BaseTool):
 
     def approval(self, arguments: dict, checkpoint: Callable[[], None]) -> ApprovalAction:
         command = arguments["command"]
+        unsandboxed = bool(arguments.get("allow_unsandboxed", False)) or not self.use_sandbox
         shell = shutil.which("bash")
         if shell is None:
             raise ToolFailure("BASH_UNAVAILABLE", "系统中找不到 Bash。")
         checkpoint()
-        preview = (
-            f"工作目录：{self.cwd}\n命令：\n{command}\n\n"
-            "此命令以当前用户权限运行，可访问工作区外的文件和网络；系统没有限制它只能操作工作区。"
+        will_sandbox = not unsandboxed and sandbox_available()
+        if will_sandbox:
+            note = "沙箱保护：已启用 macOS Seatbelt 沙箱（仅允许写入当前工作区、~/.minicc 与 /tmp）。"
+        elif unsandboxed and bool(arguments.get("allow_unsandboxed", False)):
+            note = "【提权请求】此命令请求在沙箱外（allow_unsandboxed=true）运行，可访问工作区外的文件和网络！"
+        else:
+            note = "此命令以当前用户权限运行，可访问工作区外的文件和网络；系统没有限制它只能操作工作区。"
+        preview = f"工作目录：{self.cwd}\n命令：\n{command}\n\n{note}"
+        return BashAction(
+            self.cwd,
+            shell,
+            command,
+            preview,
+            policy=self.policy,
+            unsandboxed=unsandboxed,
+            elevated=bool(arguments.get("allow_unsandboxed", False)),
         )
-        return BashAction(self.cwd, shell, command, preview)
 
 
 @dataclass(frozen=True)
@@ -60,12 +82,18 @@ class BashAction:
     shell: str
     command: str
     preview: str
+    policy: SandboxPolicy | None = None
+    unsandboxed: bool = False
+    elevated: bool = False
+    kind: str = "bash"
 
     def execute(self, checkpoint: Callable[[], None]) -> str:
         checkpoint()
+        policy = self.policy or SandboxPolicy(workspace=self.cwd)
+        argv, _ = wrap_sandbox_command(self.shell, self.command, policy, unsandboxed=self.unsandboxed)
         try:
             process = subprocess.Popen(
-                [self.shell, "--noprofile", "--norc", "-c", self.command],
+                argv,
                 cwd=self.cwd,
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
@@ -87,7 +115,10 @@ class BashAction:
                 checkpoint()
                 remaining = deadline - monotonic()
                 if remaining <= 0:
-                    raise ToolTimeout
+                    raise ToolTimeout(
+                        "TOOL_TIMEOUT",
+                        f"Bash 命令运行超过 {_COMMAND_TIMEOUT} 秒，已停止进程组。",
+                    )
                 for key, _ in selector.select(min(0.1, remaining)):
                     chunk = os.read(key.fd, 8192)
                     if not chunk:
@@ -103,9 +134,12 @@ class BashAction:
                 if process.poll() is not None and not selector.get_map():
                     break
             process.wait(timeout=1)
-        except (ToolTimeout, subprocess.TimeoutExpired):
+        except ToolTimeout:
             self._stop(process)
-            raise ToolTimeout
+            raise
+        except subprocess.TimeoutExpired as error:
+            self._stop(process)
+            raise ToolTimeout("TOOL_TIMEOUT", "Bash 命令未能按时退出，已停止进程组。") from error
         finally:
             selector.close()
             process.stdout.close()

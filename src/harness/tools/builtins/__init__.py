@@ -13,12 +13,12 @@ from src.harness.tools.builtins.write import WriteTool
 from src.harness.tools.registry import ToolRegistry
 
 
-def create_builtin_registry(root: Path) -> ToolRegistry:
+def create_builtin_registry(root: Path, *, use_sandbox: bool = True) -> ToolRegistry:
     workspace = Workspace(root)
     registry = ToolRegistry()
     for tool in (ReadTool(workspace), WriteTool(workspace), EditTool(workspace)):
         registry.register(tool)
     registry.register(ToolSearchTool(registry))
-    for tool in (BashTool(workspace.root), GlobTool(workspace), GrepTool(workspace)):
+    for tool in (BashTool(workspace.root, use_sandbox=use_sandbox), GlobTool(workspace), GrepTool(workspace)):
         registry.register(tool)
     return registry

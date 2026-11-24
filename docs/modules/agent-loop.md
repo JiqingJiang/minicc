@@ -1,46 +1,54 @@
-# Agent Loop
+# Agent Loop、运行模式（Normal / Plan / Goal）、HITL 与持久化续跑
 
-本模块把一轮用户输入推进为模型请求、工具调用、审批/重试暂停和最终答复。实现入口是 [`run_turn.py`](../../src/harness/agent_loop/run_turn.py)，会话编排与落盘见 [`chat_session.py`](../../src/runtime/session/chat_session.py)，Context 组装见 [Memory 与 Context](memory-context.md)，工具边界见[工具模块](tools.md)。当前只实现单进程终端会话；没有运行时重启后的活动轮次续跑。
+本模块是 MiniCC 的核心调度引擎，负责把用户输入推进为模型请求、工具调用、人工交接（HITL）、多步规划（Plan 模式）、自主迭代（Goal 模式）以及跨进程可恢复的持久化会话。
 
-## 职责与流程
+当前行为要求见 [Agent Loop Spec](../specs/agent-loop.md)，方案取舍见 [架构重构决策记录](../decisions/implemented/architecture/2026-11-24-core-harness-refactor.md)。
 
-- [`chat.py`](../../src/app/chat.py) 从当前工作目录确定项目身份，装配模型、Memory、Context、工具注册表和持久化会话。`--chat-only` 关闭工作区工具，但仍注册记忆工具。
-- 交互式终端启动时显示 MiniCC 猫咪 ASCII 欢迎画面、当前模型别名和工作目录；管道/非交互运行不显示欢迎画面。
-- `ChatSession.send()` 在同一会话只有一轮活动任务的条件下启动 `run_turn()`。已完成轮次的全部原始消息（包括工具调用与工具结果）作为历史传入，并标记来源轮次 ID。轮次完成或部分中止后写入 `session.json`；加载时重建工具调用结构。
-- `run_turn()` 为每次请求计算当前可提供工具，调用可选 Context 装配器，随后调用模型适配器。模型返回工具调用时，Loop 校验 ID 唯一性，逐个交执行器；工具结果用原调用 ID 回填后继续请求模型。没有工具调用时返回最终文本。
-- 需要批准的操作通过 Generator 暂停，`ChatSession.answer_approval()` 恢复执行；模型请求错误通过 `RetryRequest` 暂停，`retry()` 重试模型请求。审批等待期间暂停活动时限计时。取消会关闭 Generator，并为未完成工具调用补充中止结果，避免会话历史留下未配对调用。
-- 每次模型请求前 `ContextAssembler` 组合指令、任务状态、相关记忆、历史与工具定义，并可裁剪旧历史。模型用量与 Context 来源写入本轮记录；trace 由 Context 组件追加到本地 JSONL。
+## 模块结构与代码位置
 
-## 边界、预算与失败处理
+| 路径 | 职责 |
+| --- | --- |
+| [`src/harness/agent_loop/run_turn.py`](../../src/harness/agent_loop/run_turn.py) | 基于 Generator 的 `run_turn()` 状态机，驱动模型调用、工具执行、去重、超时预算与暂停事件。 |
+| [`src/runtime/session/chat_session.py`](../../src/runtime/session/chat_session.py) | 会话管理、运行模式切换（`normal`/`plan`/`goal`）、Goal 自动推进循环、HITL 恢复与 `session.json` / `checkpoint.json` 持久化。 |
+| [`src/runtime/task/state.py`](../../src/runtime/task/state.py) | 任务状态 `TaskState`（`goal`、`plan_steps`、`verification_command`、`requirements`、`decisions`、`progress`、`open_questions`）与带锁原子存储 `TaskStateStore`。 |
+| [`src/runtime/hitl/contracts.py`](../../src/runtime/hitl/contracts.py) | `ApprovalRequest`、`ClarificationRequest`、`RetryRequest`、`PlanStep` 及内置 `ask_user`、`update_plan` 工具。 |
+| [`src/client/tui_selector.py`](../../src/client/tui_selector.py) | 基于 `prompt_toolkit` 的键盘（`↑`/`↓`/快捷键）与鼠标点选交互式 TUI 选择器及 `/` 斜杠命令自动补全。 |
+| [`src/adapters/storage/json_file.py`](../../src/adapters/storage/json_file.py) | 统一的 `fcntl.flock` + `tempfile.mkstemp` + `os.replace` 原子 JSON 文件读写底座。 |
 
-- 一轮默认最多 12 次模型请求、24 次工具尝试和 180 秒活动时间；单次模型调用最长 60 秒。审批等待和用户重试等待不计入活动时限。
-- 最后一轮请求或工具尝试预算耗尽后进入仅答复阶段，不再提供工具。超时、预算耗尽、拒绝、重复调用和工具异常会以文本或带错误码的工具结果结束/继续本轮；模型请求异常提供重试暂停。工具结果保持原调用 ID。
-- 同一轮内拒绝过的相同操作不会再次弹审批；已批准操作不会重复执行。连续相同调用得到相同结果时会被提示，重复达到上限后返回重复调用结果。
-- Context token 数是请求前估算，不作为模型服务端 token 计费值。实际用量只在适配器返回时可用。Trace 写入失败及会话写入失败记录日志，不改变用户请求结果，因此调用成功不保证对应文件已经持久化。
-- 会话 JSON 损坏或格式不兼容时，加载明确报错；写入错误则记录日志继续运行。`/new` 归档旧会话和任务状态并创建新 ID，但目前没有终端命令恢复归档会话或任务。进程退出时，活动中的审批/重试状态不持久化。
-- 内置 Bash 虽由 Loop 等待用户审批，但没有 OS 沙箱；审批不能限制命令的当前用户权限。其他工作区边界见[工具模块](tools.md)。
+## 核心设计逻辑
 
-## 实际对话测试发现
+### 1. Generator 状态机与 HITL 交接
 
-用户提供的 Memory 对话记录还暴露了以下跨模块问题；Memory 写入与纠正细节见 [Memory 与 Context](memory-context.md)。这些是已观察到的模型输出/上下文缺口，不代表执行层已经强制保证相同行为。
+`run_turn()` 返回 `Generator[TurnPause, object, str]`，其中 `TurnPause` 包含三类暂停事件：
+- **`ApprovalRequest(call, preview, kind, elevated)`**：当工具 `requires_approval=True`（或请求 `allow_unsandboxed=True` 提权，或 `plan` 模式下提交计划审批）时产出。
+  - 若 `elevated=True`（如沙箱外执行），无论宿主处于 `default` 还是 `auto` 模式，**强制暂停**等待用户明确批准。
+  - 若 `elevated=False`，在 `auto` 模式下由宿主自动批准，在 `default` 模式下暂停交由用户选择 `yes` / `no` / `auto`。
+- **`ClarificationRequest(call, question, options, allow_custom)`**：由 `ask_user` 工具产出。暂停当前轮次并将问题与候选选项展示给用户；用户回答后，答案作为该 `call_id` 的 `ToolResult` 回填模型，从断点继续当前轮次。
+- **`RetryRequest(message)`**：模型请求超时或 API 异常时产出。已执行的工具结果保留在 `TurnRecord.messages` 中，用户输入 `/retry` 后从当前消息列表重新发起模型请求，不会重放已完成的副作用。
 
-- **当前模型身份没有作为可信上下文提供。**终端知道所选别名，适配器用配置路由请求，但发给模型的消息中没有当前别名和路由信息。因此模型回答“具体是哪家的模型无法确知”符合它可见信息的限制，却没有利用宿主已知的事实。第一次回答时终端菜单显示 `deepseek-flash` 为当前模型；Agent 没有收到此元数据。
-- **工具清单总数不可靠。**工作区注册七种工具，应用再注册 `memory_remember` 和 `memory_search`，这次运行共九种注册工具；模型回答八种。工具 Schema 会发给模型，但没有额外提供经宿主生成的完整名称清单/计数，且工具预算过滤后本轮可用集合可能变化，模型自行计数不应作为权威状态。
-- **审批说明把范围说宽了。**当前 Loop 提示明确说明 `write`、`edit` 和每条 `bash` 命令要审批，并说明 `memory_remember` 自动记录；用户看到的“所有有副作用的操作都会先预览并获批”不准确。`memory_remember` 以及终端 `/memory edit`、`/memory delete` 会直接更新记忆，不经过该审批暂停流程。工具授权与记忆持久化策略应分别说明。
-- **工具失败没有阻止 Agent 对记忆状态作出确定陈述。**记录中多次出现 `MEMORY_REJECTED`；Agent 先说“都记下了”，后来又把未验证的召回顺序和纠错结果描述为确定事实。Loop 将工具错误回填模型，但不验证最终自然语言是否与真实工具结果一致。真实模型评测应覆盖“失败后停止并如实报告”，而不只检查工具错误码。
-- **检索结果不能替代纠错确认。**即使 Context 把当前用户消息排在 Memory 前面，当前模型仍在收到“我是蒋继庆，你说错了”后回复“庆”，且未触发工具更新。提示中的优先级目前是指令文本，不是强制状态转换或输出校验。
-- **根据有限资料推断年龄/毕业时间。**Agent 根据出生日期、研三和找工作状态推断“研究生毕业是 25/26 岁、时间线吻合”，但记录里没有毕业时间，也不足以推出具体毕业年龄。这类补充不是记忆检索结果，应标成不确定或不作推断。
+所有 HITL 暂停期间的等待时长均从本轮 `limits.seconds`（默认 900 秒）中扣除。
 
-本次记录还显示，用户从 `/memory list` 得到项目范围空结果，随后 `/memory global list` 才看到全局记录；这是范围默认行为，属于 Memory 文档中记录的反馈歧义。jieba 首次加载的终端日志也不属于 Agent Loop 的模型回复。
+### 2. 三种运行模式（Normal / Plan / Goal）
 
-## 运行和验证
+`ChatSession` 维护当前模式 `mode: Literal["normal", "plan", "goal"]`（可通过 `/mode normal|plan|goal`、`/plan`、`/goal` 切换）：
+- **`normal` 模式**：暴露全部可用工具，按 `default` / `auto` 权限策略执行单轮对话。
+- **`plan` 模式**：
+  - 工具过滤：仅向模型提供只读工具（`tool.read_only == True`，如 `read`、`glob`、`grep`、`tool_search`、`memory_search`、`load_skill`、只读 `delegate_subagent`）以及 `update_plan` 和 `ask_user`。写文件（`write`/`edit`）与命令执行（`bash`）在 `plan` 模式下不会提供给模型，执行器也会拒绝执行。
+  - 计划确认：当模型调用 `update_plan(..., submit_for_approval=True)` 或完成规划时，生成结构化计划预览并触发 `ApprovalRequest(kind="plan")`。用户批准后，会话自动切入 `normal`（或用户指定的 `goal`）模式继续执行。
+- **`goal` 模式**：
+  - 围绕 `TaskState` 中的 `goal`、`plan_steps` 和 `verification_command` 进行多轮自主迭代（单次 `send()` / `run_goal()` 最多连续推进 `max_goal_rounds=8` 轮）。
+  - 每轮结束后，若未遇到 HITL 暂停，宿主检查 `TaskState` 是否仍有未完成的 `plan_steps`（`pending` / `in_progress`），或配置的 `verification_command` 尚未验证通过。若是，则自动发起下一轮跟进请求，直至所有步骤均为 `completed` 且验证通过，或达到轮次上限。
 
-从仓库根目录安装依赖后，可用 `python3 -B -m src.app.chat` 启动终端。模型由 `models.json` 与 `MINICC_MODEL` 选择，凭据从相应环境变量读取；工作区为启动时的当前目录。
+### 3. 持久化与跨进程断点续跑（Persistence & Resume）
 
-离线回归命令：
+为了保证进程意外退出或用户切走后重进能够无缝续跑，每个项目目录 `~/.minicc/projects/<project_id>/` 维护三份通过 `atomic_write_json` 同步的文件：
+1. `session.json`：已完成轮次的完整对话与工具调用轨迹（含 `session_id`、当前 `mode`）。
+2. `task.json`：当前 `TaskState`（Goal、Plan 步骤清单、已确认要求与决定、验证命令）。
+3. `checkpoint.json`：当一轮对话处于活动或 HITL 挂起状态（`ApprovalRequest`、`ClarificationRequest`、`RetryRequest`）时，实时保存当前轮次的 `turn_id`、已累积的 `messages`（含已完成的工具调用与结果）以及当前挂起的 `pending_pause` 描述（工具调用参数、预览或问题选项）。
+   - **恢复流程（`ChatSession.resume()`）**：新进程启动加载 `ChatSession` 时，若发现存在 `checkpoint.json`，`session.has_pending_checkpoint` 为 `True`。客户端展示挂起的审批/提问/重试状态，用户调用 `resume(answer)`（或在终端输入回答 / `/resume`）即可先结算挂起项（例如执行获批的 `write`/`edit`/`bash` 或回填 `ask_user` 回答），再将已累积的本轮消息无缝接回 `run_turn()` 继续向模型请求，**既不丢失本轮前序已执行的工具结果，也不重复执行已完成的工具**。
 
-```sh
-python3 -B -m unittest discover -s tests -v
-```
+### 4. 智能去重（解决测试循环误杀）
 
-`tests/test_tool_turn.py` 覆盖 Loop 的工具调用、审批和预算路径；`tests/test_terminal_approval.py` 覆盖终端审批交互；`tests/test_memory.py` 覆盖记忆存储的部分边界。测试不访问真实模型。会话重启恢复、Context 裁剪/trace 和真实模型端到端质量仍需单独验收。
+- 用户在本轮拒绝过的调用记录在 `denied: set[tuple[str, str]]` 中，本轮内模型若原样再次请求，直接返回 `APPROVAL_DENIED`，不再重复打扰用户。
+- 只读工具若连续 3 次以完全相同的参数调用并得到相同结果，提示并阻断（`REPEATED_CALL`）。
+- 对于副作用工具（`write`、`edit`、`bash`），不再使用全局不变的 `approved_calls` 锁死整轮：允许在文件状态变化后再次编辑同一文件，也允许在修改代码前后多次运行相同的测试命令（如 `pytest` / `unittest`），仅拦截**紧邻上一步、中间没有任何其他工具调用且参数完全相同**的无意义重复写操作。

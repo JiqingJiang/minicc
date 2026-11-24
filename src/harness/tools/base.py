@@ -1,9 +1,11 @@
 """Shared tool contracts and data passed through the agent loop."""
 
-import json
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass
+import json
 from typing import Protocol
 
 
@@ -16,7 +18,9 @@ class ToolFailure(Exception):
 
 
 class ToolTimeout(Exception):
-    pass
+    def __init__(self, code: str = "TOOL_TIMEOUT", message: str = "工具执行超时，已停止该操作。") -> None:
+        super().__init__(message)
+        self.code = code
 
 
 @dataclass(frozen=True)
@@ -47,7 +51,8 @@ class BaseTool(ABC):
     name: str
     description: str
     parameters: dict
-    requires_approval = False
+    requires_approval: bool = False
+    read_only: bool = False
 
     @abstractmethod
     def execute(self, arguments: dict, checkpoint: Callable[[], None]) -> str:
@@ -72,4 +77,6 @@ def tool_definitions(tools: tuple[BaseTool, ...]) -> list[dict]:
 
 
 def schema_size(tools: tuple[BaseTool, ...]) -> int:
-    return len(json.dumps(tool_definitions(tools), ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+    return len(
+        json.dumps(tool_definitions(tools), ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    )

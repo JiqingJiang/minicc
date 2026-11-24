@@ -1,8 +1,8 @@
 """Search bounded UTF-8 workspace files with a regular expression."""
 
+from collections.abc import Callable
 import fnmatch
 import regex
-from collections.abc import Callable
 
 from src.harness.permission.workspace import Workspace, WorkspaceError
 from src.harness.tools.base import BaseTool, ToolFailure
@@ -11,6 +11,7 @@ from src.harness.tools.base import BaseTool, ToolFailure
 class GrepTool(BaseTool):
     name = "grep"
     description = "Search files by regex."
+    read_only = True
     parameters = {
         "type": "object",
         "properties": {
@@ -44,7 +45,7 @@ class GrepTool(BaseTool):
                 candidates = [self.workspace.display(parts) for parts in files]
             matches: list[str] = []
             scanned_bytes = 0
-            for parts, path in zip(files, candidates):
+            for _parts, path in zip(files, candidates):
                 checkpoint()
                 if glob and not _matches(path, base, glob):
                     continue

@@ -1,88 +1,46 @@
-# MiniCC 工具模块
+# 工具、工作区权限、OS 沙箱与 MCP 模块
 
-状态：当前实现已完成定向功能测试；真实模型任务评测和用户体验验收仍待完成。
+本模块将模型的工具调用转化为经 Schema 校验、受工作区与 OS 沙箱约束、接入 HITL 审批的本地或 MCP 操作。
 
-当前确认的行为要求见[工具模块 spec](../specs/tools.md)。重要取舍和 Review 处置见[项目决策记录](../decisions/implemented/architecture/2026-11-22-tool-module-decisions.md)。
+当前行为要求见 [工具、沙箱安全与 MCP Spec](../specs/tools.md)。
 
-## 目标与边界
-
-工具模块把模型的工具调用转换成经校验、受预算约束、带结果证据的本地操作。内置文件工具只在启动时确定的工作区内工作；会修改文件或运行命令的操作必须先展示内容并等待用户批准。
-
-当前实现覆盖工作区文件读取/写入、精确编辑、文件名与文本搜索、工具发现和 Bash 命令；应用装配时还注册 `memory_remember` 与 `memory_search`。`--chat-only` 只关闭工作区工具，仍保留记忆工具。Runtime 负责会话和审批等待，Agent Loop 负责模型/工具迭代，工具执行器负责统一校验和执行。Bash 通过明确审批取得授权，但没有 OS 沙箱，仍以当前用户权限访问工作区以外的文件和网络。
-
-## 模块结构与职责
+## 模块结构与代码位置
 
 | 路径 | 职责 |
 | --- | --- |
-| [`base.py`](../../src/harness/tools/base.py) | `BaseTool`、调用/结果数据、失败和审批契约、模型工具定义序列化。 |
-| [`registry.py`](../../src/harness/tools/registry.py) | 按稳定顺序注册工具、按名称查找、拒绝重复名称。 |
-| [`executor.py`](../../src/harness/tools/executor.py) | 筛选可提供工具、校验 Schema 与 JSON 参数、执行、审批恢复、结果截断和异常归一化。 |
-| [`builtins/`](../../src/harness/tools/builtins/) | 各内置工具的输入、说明、预览和操作实现。 |
-| [`memory/`](../../src/harness/memory/) | `memory_remember` 和 `memory_search` 负责记忆写入及定向检索；具体存储和范围规则见 [Memory 与 Context](memory-context.md)。 |
-| [`workspace.py`](../../src/harness/permission/workspace.py) | 工作区相对路径、敏感路径保护、无链接文件访问、受限读取/扫描和原子文件发布。 |
-| [`run_turn.py`](../../src/harness/agent_loop/run_turn.py) | 模型工具循环、调用 ID 配对、重试、审批暂停、重复调用和轮次预算。 |
-| [`chat_session.py`](../../src/runtime/session/chat_session.py) | 保留活动轮次，接受审批/重试/取消，并将完整或部分结果并入会话历史。 |
-| [`terminal_chat.py`](../../src/client/terminal_chat.py) | 展示工具参数、结果、审批预览和用户决定。 |
-| [`litellm_model.py`](../../src/adapters/models/litellm_model.py) | 在 MiniCC 消息与 LiteLLM 工具调用协议之间转换并提取请求用量。 |
+| [`src/harness/tools/base.py`](../../src/harness/tools/base.py) | `BaseTool`（含 `requires_approval`、`read_only` 属性）、`ToolCall`、`ToolResult`、`ApprovalAction` 契约。 |
+| [`src/harness/tools/registry.py`](../../src/harness/tools/registry.py) | 按稳定顺序注册与查找工具，支持按运行模式（如 `plan` 只读模式）筛选工具集。 |
+| [`src/harness/tools/executor.py`](../../src/harness/tools/executor.py) | Schema Draft 2020-12 校验、严格 JSON 解析、Schema 字节预算过滤、审批暂停与恢复、结果截断。 |
+| [`src/harness/permission/workspace.py`](../../src/harness/permission/workspace.py) | 目录 fd + `O_NOFOLLOW` 路径解析、敏感路径拦截、安全递归创建子目录、平台原子目录项交换（`RENAME_SWAP` / `RENAME_EXCHANGE`）。 |
+| [`src/adapters/sandbox/executor.py`](../../src/adapters/sandbox/executor.py) | `SandboxPolicy` 与 `SandboxExecutor`：macOS `sandbox-exec` Seatbelt Profile 生成与隔离执行、提权标记与进程组超时清理。 |
+| [`src/harness/tools/builtins/`](../../src/harness/tools/builtins/) | `read`、`write`、`edit`、`bash`、`glob`、`grep`、`tool_search` 内置工具实现。 |
+| [`src/adapters/mcp/client.py`](../../src/adapters/mcp/client.py) | 基于 `subprocess` + JSON-RPC 2.0 over `stdio` 的轻量级 MCP 客户端与 `McpTool(BaseTool)` 适配器。 |
 
-工作区工具由 [`create_builtin_registry()`](../../src/harness/tools/builtins/__init__.py) 按固定顺序装配；应用入口再注册两项记忆工具：
+## 核心设计逻辑
 
-| 工具 | 行为 | 审批 |
-| --- | --- | --- |
-| `read` | 读取有界 UTF-8 文本，可指定起始行和行数。 | 否 |
-| `write` | 创建或完整替换文本文件，先显示差异预览。 | 每次 |
-| `edit` | 精确替换文件内唯一匹配的文本，先显示差异预览。 | 每次 |
-| `tool_search` | 按名称和描述查找当前有效且能放入 Schema 预算的工具。 | 否 |
-| `bash` | 在工作区目录启动 Bash，展示完整命令和工作目录。 | 每条命令 |
-| `glob` | 按工作区相对模式列出文件。 | 否 |
-| `grep` | 在工作区 UTF-8 文本中按正则表达式搜索。 | 否 |
-| `memory_remember` | 保存有长期价值的偏好、纠正、项目事实、决定、流程或参考项。 | 否 |
-| `memory_search` | 按查询检索当前全局与项目记忆。 | 否 |
+### 1. 工作区文件安全边界（`Workspace`）
 
-## 一次工具调用如何工作
+- 所有文件操作通过 `os.open(..., dir_fd=fd, O_NOFOLLOW)` 逐级进入子目录，杜绝符号链接跳出工作区。
+- `Workspace.create()` 支持在工作区内安全地逐级创建尚不存在的父目录（每级均校验非符号链接、非受保护目录名，并以 `mkdir(..., dir_fd=fd)` 创建），使 `write` 工具可以直接创建如 `src/new_pkg/module.py` 的新文件。
+- `Workspace.replace()` 在覆盖已有文件时，先写入同目录随机临时文件并 `fsync`，再调用 macOS `renameatx_np(RENAME_SWAP)` 或 Linux `renameat2(RENAME_EXCHANGE)` 原子交换，随后立即校验被换出的原文件 `(dev, ino)` 与 SHA-256 是否与审批预览基线一致；若不一致则原子回滚或保留备份文件。
+- `Workspace.files()` 与 `glob` / `grep` 在达到扫描上限（10,000 个条目或 500 条结果）时，会在返回结果尾部附加明确截断提示，防止模型把“达到扫描上限”误判为“文件不存在”。
 
-1. Loop 使用执行器筛过的工具定义调用模型。定义无效或超出单次请求 3,600 UTF-8 字节 Schema 预算的工具不会提供给模型。
-2. LiteLLM 适配器把回复转换为 `ToolCall(call_id, name, arguments)`。Loop 检查调用 ID 不为空且不重复，再由执行器严格解析 JSON、拒绝重复对象键和非有限数字，并按 JSON Schema 校验参数。
-3. 普通工具立即执行。`write`、`edit`、`bash` 先创建 `PendingApproval` 和可展示的预览，Session 暂停当前 Generator；终端默认拒绝，只有明确 yes 才继续执行。拒绝会作为带原调用 ID 的结构化结果回填。Memory 工具也走同一参数与错误归一化路径，但不触发审批。
-4. 执行结果或安全错误都以原 `call_id` 回填模型。意外异常不泄露 traceback；工具输出有长度上限。完整工具调用与结果保存在会话历史，后续请求可将其作为历史证据传入；Context 可在单次请求中裁剪大型结果，原始会话记录仍保留。详见 [Agent Loop](agent-loop.md) 与 [Memory 与 Context](memory-context.md)。
-5. 模型请求失败返回可重试暂停；重试会保留已执行结果，不重新执行成功工具。用户可取消当前轮；Session 为尚无最终结果的调用补上中止记录。
+### 2. 命令执行与 macOS `sandbox-exec` 沙箱（`SandboxExecutor` & `BashTool`）
 
-Schema 校验属于执行边界而不是注册表：所有工具在“提供给模型”和“实际执行”两个边界都会验证定义。这样搜索结果与真实可用能力保持一致，坏定义不会阻塞其他工具或被执行。`tool_search` 只搜索已注册且符合 Schema 预算的工具；它不会动态加载工具。
+- `BashTool` 支持参数 `command: str` 与可选的 `allow_unsandboxed: bool = False`。
+- 当 `allow_unsandboxed=False`（默认）且运行在 macOS（存在 `/usr/bin/sandbox-exec`）时，`SandboxExecutor` 动态生成 Seatbelt Profile：
+  - `(allow default)` 配合 `(deny file-write*)` 与默认 `(deny network*)`（可按配置开启网络）；
+  - 仅显式放行 `(allow file-write* (subpath "<workspace>") (subpath "<state_root>") (subpath "/tmp") (subpath "/private/tmp") (subpath "/private/var/folders") (literal "/dev/null"))`。
+  - 任何试图修改工作区、`~/.minicc` 或临时目录之外文件的命令（例如修改 `~/.zshrc` 或桌面其他项目）会被内核直接以 `Operation not permitted` 拦截。
+- 当模型发现某项操作被沙箱拦截（或需要联网安装依赖）而请求 `allow_unsandboxed=True` 时，`ApprovalAction.elevated` 为 `True`。**即使当前会话处于 `Auto` 免审批模式，Agent Loop 也会强制暂停并弹出高亮的沙箱外提权审批框**，必须由用户单次显式确认后才会在非沙箱进程组中执行。
 
-## 工作区访问与审批写入
+### 3. 轻量级 MCP 接入（`src/adapters/mcp/client.py`）
 
-`Workspace` 将根目录解析为固定目录，并以相对路径、目录文件描述符和 `O_NOFOLLOW` 访问文件。它拒绝路径穿越、绝对路径、符号链接、敏感凭证路径和非普通文件；文本读写限制为 1 MiB。目录扫描最多检查 10,000 个条目，并跳过常见缓存、虚拟环境和依赖目录。
+- 采用标准库 `subprocess.Popen` 启动配置的 MCP Server 进程，通过 `stdin`/`stdout` 读写换行分隔的 JSON-RPC 2.0 消息。
+- 初始化流程：发送 `initialize` 请求 -> 校验响应 -> 发送 `notifications/initialized` -> 调用 `tools/list` 获取工具列表。
+- 每个 MCP 工具包装为 `McpTool(BaseTool)`，名称为 `mcp__<server>__<tool_name>`，默认 `requires_approval = not server_config.get("read_only", False)`，与内置工具共享同一套 `ToolExecutor` 参数校验、超时检查点和 HITL 审批流。
 
-`write` 和 `edit` 在用户批准前只读取基线并生成预览。批准后，内容先写入同目录临时文件，再与目标做原子目录项交换；交换后检查被替换项的 inode 和 SHA-256 是否仍匹配预览基线。若交换时目标项已变化，会尝试原子回滚；若回滚失败或回滚期间出现额外修改，临时副本会保留，错误结果会报告副本名称。这能检测目录项交换时已发生的冲突，但不为已经打开旧 inode 的非协作写进程提供全局排他锁。
+### 4. 工具与 MCP 的持久化启停控制（`/tools` 与 `/mcp`）
 
-原子交换使用 macOS `renameatx_np(RENAME_SWAP)` 或 Linux `renameat2(RENAME_EXCHANGE)`。运行环境或文件系统不支持安全交换时，写入明确失败，不降级为普通覆盖。新文件使用不覆盖已有目标的创建方式。
-
-工作区保护不覆盖 Bash：审批只表明用户确认了显示出的命令，并不构成沙箱。Bash 最长运行 60 秒，输出上限 16 KiB；超时/超量会停止其进程组。命令仍可在其权限范围内访问工作区外的资源。
-
-## 搜索、预算与失败路径
-
-- `grep` 使用支持超时的 `regex` 包，每行匹配上限 50 毫秒。正则超时返回 `REGEX_TIMEOUT`，避免单次灾难性回溯卡住 Agent Loop。单轮总截止时间仍依赖工具检查点；不遵守检查点的扩展工具不能被 Python 线程强制终止。
-- grep 扫描最多 8 MiB、返回最多 100 个匹配和 7,500 字符。glob 最多返回 500 个路径。
-- 单个工具参数最多 64 KiB；单次模型请求提供的工具 Schema 总量最多 3,600 字节；工具结果最多 8,000 字符。
-- 默认单轮最多 12 次模型请求、24 次工具尝试和 180 秒活动执行时间。审批和用户重试等待时间不计入活动截止时间。
-- 拒绝、无效参数、未提供工具、重复调用、时间/调用预算耗尽和工具异常均返回可识别的工具结果，避免模型侧调用记录失配。
-
-Memory 工具的具体内容限制、来源标记和范围隔离由 Memory 模块负责；写入拒绝或搜索参数错误以工具错误码返回。自动 Context 召回不依赖模型发起 `memory_search`，二者使用同一个管理器。
-
-## 运行与验证
-
-启动入口见 [`chat.py`](../../src/app/chat.py)。从仓库根目录安装 [requirements.txt](../../requirements.txt) 后执行：
-
-```sh
-python3 -B -m src.app.chat
-```
-
-工作区取当前命令目录；传 `--chat-only` 可关闭工具。
-
-离线回归检查（覆盖工具调用、审批和记忆存储）：
-
-```sh
-.venv/bin/python -B -m unittest discover -s tests -v
-```
-
-2026-11-22 在本工作区执行结果见本轮交付摘要；测试不调用真实模型。真实模型任务评测与用户体验验收仍待执行。工具接口、范围和失败行为详见上述实现；本节不记录未在当前工作区重跑的历史通过数量。
+- `ToolRegistry` 支持绑定 `state_path`（默认 `~/.minicc/tools.json`），持久化保存用户停用的工具集合。`/tools` 命令以 `1..N` 编号列出所有已注册工具，用户输入编号即可一键切换启用/停用状态；停用后的工具不会从 `registry.all()` 返回。
+- `McpManager` 支持绑定 `state_path`（默认 `~/.minicc/mcp.json`），持久化保存每个 MCP Server 的启用/停用状态，并动态同步到 `ToolRegistry`。`/mcp` 命令以 `1..N` 编号展示各 MCP Server 及其工具列表，用户输入编号即可一键开启或关闭对应 MCP Server。

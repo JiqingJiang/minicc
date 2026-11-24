@@ -1,19 +1,17 @@
-"""Filesystem boundary for workspace-relative agent operations.
+"""Filesystem boundary for workspace-relative agent operations."""
 
-Tools describe an operation; this module owns path validation, protected-path
-rules, symlink rejection, bounded reads, scans and atomic file publication.
-"""
+from __future__ import annotations
 
+from collections.abc import Callable, Iterator
 import ctypes
+from dataclasses import dataclass
 import errno
 import hashlib
 import os
+from pathlib import Path
 import secrets
 import stat
 import sys
-from collections.abc import Callable, Iterator
-from dataclasses import dataclass
-from pathlib import Path
 
 
 class WorkspaceError(Exception):
@@ -96,10 +94,15 @@ class Workspace:
         except OSError as error:
             raise self._map_error(error, ".") from error
 
-    def _open_directory(self, parts: tuple[str, ...]) -> int:
+    def _open_directory(self, parts: tuple[str, ...], *, create_missing: bool = False) -> int:
         fd = self._open_root()
         try:
             for part in parts:
+                if create_missing:
+                    try:
+                        os.mkdir(part, 0o755, dir_fd=fd)
+                    except FileExistsError:
+                        pass
                 child = os.open(
                     part,
                     os.O_RDONLY | _O_DIRECTORY | _O_NOFOLLOW | _O_CLOEXEC,
@@ -115,10 +118,10 @@ class Workspace:
             os.close(fd)
             raise
 
-    def _open_parent(self, parts: tuple[str, ...]) -> tuple[int, str]:
+    def _open_parent(self, parts: tuple[str, ...], *, create_missing: bool = False) -> tuple[int, str]:
         if not parts:
             raise WorkspaceError("INVALID_PATH", "需要文件路径。")
-        return self._open_directory(parts[:-1]), parts[-1]
+        return self._open_directory(parts[:-1], create_missing=create_missing), parts[-1]
 
     @staticmethod
     def _map_error(error: OSError, display: str) -> WorkspaceError:
@@ -186,7 +189,7 @@ class Workspace:
 
     def create(self, path: str, content: str, checkpoint: Callable[[], None]) -> None:
         parts = self.parts(path)
-        parent, leaf = self._open_parent(parts)
+        parent, leaf = self._open_parent(parts, create_missing=True)
         try:
             self._publish(parent, leaf, content, checkpoint, replace=False)
         finally:
@@ -207,8 +210,13 @@ class Workspace:
             if current.identity != expected_identity or current.digest != expected_digest:
                 raise WorkspaceError("FILE_CHANGED", "文件在审批后发生变化，已取消写入。")
             self._publish(
-                parent, leaf, content, checkpoint, replace=True,
-                expected_identity=expected_identity, expected_digest=expected_digest,
+                parent,
+                leaf,
+                content,
+                checkpoint,
+                replace=True,
+                expected_identity=expected_identity,
+                expected_digest=expected_digest,
             )
         finally:
             os.close(parent)
@@ -277,7 +285,7 @@ class Workspace:
                             preserve_temporary = True
                     except (OSError, WorkspaceError):
                         preserve_temporary = True
-                    detail = f"文件在审批后发生变化，已取消写入。"
+                    detail = "文件在审批后发生变化，已取消写入。"
                     if preserve_temporary:
                         detail += f" 原文件副本保留在 {temporary}。"
                     raise WorkspaceError("FILE_CHANGED", detail)
@@ -320,9 +328,7 @@ class Workspace:
                     try:
                         self.parts(self.display(child))
                         metadata = os.stat(name, dir_fd=fd, follow_symlinks=False)
-                    except OSError:
-                        continue
-                    except WorkspaceError:
+                    except (OSError, WorkspaceError):
                         continue
                     mode = metadata.st_mode
                     if stat.S_ISDIR(mode):

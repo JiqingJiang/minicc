@@ -10,7 +10,9 @@ from src.harness.tools.base import ApprovalAction, BaseTool, ToolFailure
 
 class WriteTool(BaseTool):
     name = "write"
-    description = "Write after approval."
+    description = "Create or replace text files in the workspace. Default permission mode requires approval."
+    requires_approval = True
+    read_only = False
     parameters = {
         "type": "object",
         "properties": {

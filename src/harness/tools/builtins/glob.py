@@ -1,7 +1,7 @@
 """Find workspace files by a bounded glob pattern."""
 
-import fnmatch
 from collections.abc import Callable
+import fnmatch
 
 from src.harness.permission.workspace import Workspace, WorkspaceError
 from src.harness.tools.base import BaseTool, ToolFailure
@@ -10,6 +10,7 @@ from src.harness.tools.base import BaseTool, ToolFailure
 class GlobTool(BaseTool):
     name = "glob"
     description = "Find files by glob."
+    read_only = True
     parameters = {
         "type": "object",
         "properties": {
@@ -37,12 +38,18 @@ class GlobTool(BaseTool):
             ]
         except WorkspaceError as error:
             raise ToolFailure(error.code, str(error)) from error
+        truncated = len(results) > 500
         results = results[:500]
-        return "\n".join(results) if results else "没有匹配的工作区文件。"
+        if not results:
+            return "没有匹配的工作区文件。"
+        text = "\n".join(results)
+        if truncated:
+            text += "\n[结果已限制为前 500 条。]"
+        return text
 
 
 def _matches(path: str, base: tuple[str, ...], pattern: str) -> bool:
     parts = tuple(path.split("/"))
-    relative = "/".join(parts[len(base):]) if parts[:len(base)] == base else path
+    relative = "/".join(parts[len(base) :]) if parts[: len(base)] == base else path
     patterns = (pattern, pattern[3:]) if pattern.startswith("**/") else (pattern,)
     return any(fnmatch.fnmatchcase(candidate, item) for candidate in (path, relative) for item in patterns)

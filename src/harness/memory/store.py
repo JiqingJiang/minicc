@@ -2,17 +2,17 @@
 
 from __future__ import annotations
 
-import json
-import os
-import re
-import uuid
-import fcntl
-import tempfile
 from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
-from pathlib import Path
 from functools import wraps
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import uuid
 
+from src.adapters.storage.json_file import atomic_write_json, ensure_private_dir, file_lock
 from src.harness.memory.tokenization import tokenize
 
 MEMORY_CATEGORIES = {
@@ -22,6 +22,10 @@ MEMORY_SOURCES = {
     "user_instruction", "user_correction", "confirmed_decision", "agent_extraction", "user_edit",
 }
 MEMORY_RELATIONS = {"new", "duplicate", "supplement", "supersede", "time_update", "conflict", "uncertain"}
+_COMPATIBLE_CATEGORY_GROUPS = (
+    {"user_preference", "user_correction"},
+    {"project_fact", "decision", "procedure"},
+)
 SENSITIVE = re.compile(
     r"(?i)(?:api[_ -]?key|secret|password|passwd|token|credential|private[_ -]?key)\s*[:=]\s*\S+"
     r"|-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"
@@ -30,7 +34,57 @@ SENSITIVE = re.compile(
 
 
 def state_root() -> Path:
-    return Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state")) / "minicc"
+    return Path.home() / ".minicc"
+
+
+def migrate_legacy_state() -> None:
+    """Move/copy state from the old XDG location during application startup."""
+    home = Path.home()
+    target = state_root()
+    legacy_base = Path(os.environ.get("XDG_STATE_HOME", home / ".local" / "state")).expanduser()
+    legacy = legacy_base / "minicc"
+    if (
+        legacy == target or target in legacy.parents or target.is_symlink()
+        or not legacy.is_dir() or legacy.is_symlink()
+    ):
+        return
+
+    if not target.exists():
+        target.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            legacy.replace(target)
+            target.chmod(0o700)
+            return
+        except OSError:
+            pass
+
+    ensure_private_dir(target)
+    marker = target / ".legacy-state-migrated"
+    if marker.exists():
+        return
+
+    _copy_missing_state(legacy, target)
+    marker.write_text(str(legacy) + "\n", encoding="utf-8")
+    marker.chmod(0o600)
+
+
+def _copy_missing_state(source: Path, destination: Path) -> None:
+    ensure_private_dir(destination)
+    for path in sorted(source.rglob("*")):
+        if path.is_symlink():
+            continue
+        relative = path.relative_to(source)
+        target = destination / relative
+        if path.is_dir():
+            ensure_private_dir(target)
+        elif path.is_file() and not target.exists():
+            ensure_private_dir(target.parent)
+            shutil.copy2(path, target)
+        elif path.is_file() and target.is_file() and path.read_bytes() != target.read_bytes():
+            conflict = destination / ".legacy-conflicts" / relative
+            if not conflict.exists():
+                ensure_private_dir(conflict.parent)
+                shutil.copy2(path, conflict)
 
 
 def now_utc() -> str:
@@ -41,15 +95,15 @@ def _serialized(method):
     """Serialize read-modify-write operations across threads and processes."""
     @wraps(method)
     def wrapped(self, *args, **kwargs):
-        _private_directory(self.path.parent)
-        lock_path = self.path.with_suffix(self.path.suffix + ".lock")
-        with lock_path.open("a+") as lock_file:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-            try:
-                return method(self, *args, **kwargs)
-            finally:
-                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        with file_lock(self.path):
+            return method(self, *args, **kwargs)
     return wrapped
+
+
+def _categories_compatible(left: str, right: str) -> bool:
+    if left == right:
+        return True
+    return any(left in group and right in group for group in _COMPATIBLE_CATEGORY_GROUPS)
 
 
 @dataclass
@@ -134,7 +188,8 @@ class MemoryStore:
         duplicate = next((
             item for item in all_items
             if item.active and item.status in {"active", "conflict"}
-            and item.category == category and _normalize(item.content) == _normalize(content)
+            and _categories_compatible(item.category, category)
+            and _normalize(item.content) == _normalize(content)
         ), None)
         if duplicate is not None:
             self._add_source(duplicate, source_type, source_ref)
@@ -150,8 +205,10 @@ class MemoryStore:
             raise ValueError("duplicate 操作必须且只能指定一条相关记忆。")
         if relation == "new" and related:
             raise ValueError("new 操作不能带相关记忆 ID；请说明它们是补充、取代还是冲突。")
-        if any(item.category != category for item in related) and relation in {"duplicate", "supersede", "time_update"}:
-            raise ValueError("重复或取代关系必须是同一记忆类别。")
+        if any(not _categories_compatible(item.category, category) for item in related) and relation in {
+            "duplicate", "supersede", "time_update",
+        }:
+            raise ValueError("重复或取代关系必须是同一或兼容的记忆类别。")
         if relation == "supersede" and source_type not in {"user_instruction", "user_correction", "confirmed_decision"}:
             raise ValueError("只有用户明确指示、纠正或确认的决定才能取代长期记忆。")
         if relation == "supersede" and not _trusted_source(source_ref, source_type):
@@ -212,7 +269,14 @@ class MemoryStore:
         return new_item, relation
 
     @_serialized
-    def update(self, memory_id: str, content: str, *, embedding: list[float] | None = None, embedding_model: str | None = None) -> Memory:
+    def update(
+        self,
+        memory_id: str,
+        content: str,
+        *,
+        embedding: list[float] | None = None,
+        embedding_model: str | None = None,
+    ) -> Memory:
         content = content.strip()
         if len(content) < 2 or len(content) > 1800 or SENSITIVE.search(content):
             raise ValueError("记忆内容为空、过长或疑似包含密钥，未保存。")
@@ -305,7 +369,6 @@ class MemoryStore:
             items = [Memory(**_migrate_record(item, allowed)) for item in raw]
         except (AttributeError, TypeError, KeyError) as error:
             raise RuntimeError(f"记忆文件记录格式无效：{self.path}") from error
-        # Older MiniCC versions used only ``active`` for soft deletion.
         for item in items:
             if not item.active and item.status == "active":
                 item.status = "deleted"
@@ -337,17 +400,7 @@ class MemoryStore:
             item.sources.append(source)
 
     def _write(self, items: list[Memory]) -> None:
-        _private_directory(self.path.parent)
-        fd, temporary_name = tempfile.mkstemp(prefix=self.path.name + ".", suffix=".tmp", dir=self.path.parent)
-        temporary = Path(temporary_name)
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as output:
-                output.write(json.dumps([asdict(item) for item in items], ensure_ascii=False, indent=2) + "\n")
-                output.flush()
-                os.fsync(output.fileno())
-            os.replace(temporary, self.path)
-        finally:
-            temporary.unlink(missing_ok=True)
+        atomic_write_json(self.path, [asdict(item) for item in items])
 
 
 def _trusted_source(source_ref: str | None, source_type: str) -> bool:
@@ -357,7 +410,14 @@ def _trusted_source(source_ref: str | None, source_type: str) -> bool:
         source = json.loads(source_ref)
     except (TypeError, json.JSONDecodeError):
         return False
-    return bool(source.get("session_id") and source.get("turn_id") and source.get("trusted_source_type") == source_type)
+    trusted_type = source.get("trusted_source_type")
+    allowed = {"user_instruction", "user_correction", "confirmed_decision"}
+    return bool(
+        source.get("session_id")
+        and source.get("turn_id")
+        and trusted_type in allowed
+        and (trusted_type == source_type or source_type in allowed)
+    )
 
 
 def _normalize(content: str) -> str:
@@ -389,7 +449,6 @@ def _keywords(content: str) -> list[str]:
 
 
 def _entities(content: str) -> list[str]:
-    # Retain likely identifiers and proper-name candidates as retrieval hints.
     matches = re.findall(r"(?:[A-Z][A-Za-z0-9_.-]{1,}|[\w.-]+/[\w./-]+|#[\w-]+)", content)
     return list(dict.fromkeys(matches))[:20]
 
@@ -405,11 +464,3 @@ def _revision(item: Memory) -> dict:
         "effective_at": item.effective_at,
         "valid_until": item.valid_until,
     }
-
-
-def _private_directory(path: Path) -> None:
-    path.mkdir(parents=True, exist_ok=True, mode=0o700)
-    try:
-        path.chmod(0o700)
-    except OSError:
-        pass

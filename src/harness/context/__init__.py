@@ -1,8 +1,7 @@
-"""Per-request context assembly and extension interfaces."""
+"""Context assembly, prompt catalog, and budget policy."""
 
-from src.harness.context.assembler import ContextAssembler, ContextBudget, ContextResult, ContextTrace
+from src.harness.context.assembler import ContextAssembler, ContextBudget, ContextResult, ContextTrace, project_identity
 from src.harness.context.prompt import AgentProfile, PromptCatalog, SystemPromptProvider
-from src.harness.context.skills import Skill, SkillProvider
 
 __all__ = [
     "AgentProfile",
@@ -11,7 +10,6 @@ __all__ = [
     "ContextResult",
     "ContextTrace",
     "PromptCatalog",
-    "Skill",
-    "SkillProvider",
     "SystemPromptProvider",
+    "project_identity",
 ]
